@@ -1,0 +1,48 @@
+language: go
+
+go:
+  - "1.10"
+
+install: true
+
+#dont email me i dont like spam
+notifications:
+  email: false
+
+before_script:
+  - go get github.com/mdaffin/go-telegraf
+  - go get github.com/bcampbell/fuzzytime
+  - go get github.com/ziutek/telnet
+  - go get honnef.co/go/tools/cmd/megacheck
+  - go get github.com/golang/lint/golint
+  - go get github.com/stretchr/testify
+
+
+script:
+  - golint -set_exit_status .
+  - go test .
+  - go vet .
+  - megacheck .
+  # dont build this because it must be built on arm or with go with arm.
+  # - go build -o ./dht-sensor/dht-sensor ./dht-sensor/dht-sensor
+  - GOOS=linux GOARCH=amd64 go build -o controller-conviron_linux_amd64
+  - GOOS=linux GOARCH=arm GOARM=7 go build -o controller-conviron_linux_armv7
+  - GOOS=windows GOARCH=amd64 go build -o controller-conviron_win_amd64
+
+before_deploy:
+  - git config --local user.name "gdunstone"
+  - git config --local user.email "freedom.2.the.leetle.people@gmail.com"
+
+deploy:
+  provider: releases
+  api_key: $TOKEN
+  file_glob: true
+  file:
+    - "controller-conviron_linux_amd64"
+    - "controller-conviron_linux_armv7"
+    - "controller-conviron_win_amd64"
+
+  name: Release $TRAVIS_TAG
+  skip_cleanup: true
+  on:
+    tags: true
