@@ -45,31 +45,33 @@ var (
 	// therefore 21.6c == 216 is used
 	temperatureMultiplier = 10.0
 
-	// cant remember what these are used for
-	temperatureDataIndex = 105
-	humidityDataIndex    = 106
-	lightDataIndex       = 107
-
-	// Conviron Control Sequences
-	// Give as a comma-seperated list of strings, each string consisting of
-	//  "<Datatype> <Index> <Value>"
-
-	// The init sequence is a sequence of strings passed to the set command which
-	// "setup" the conviron PCOweb controller to receive the temperature, humidity, and light settings.
-	initCommand = []string{"I 100 26", "I 101 1", "I 102 1"}
-
-	// The teardown sequence happens at the end of each set of messages
-	// (not at the end of the connection)
-	teardownCommand = []string{"I 123 1", "I 121 1"}
-
-	// Command to clear the write flag, occurs after writing but before reloading.
-	clearWriteFlagCommand = []string{"I 120 0"}
-
-	// Sequence to force reloading of the schedule, to make the written changes go live
-	reloadSequence = []string{"I 100 7", "I 101 1", "I 102 1"}
-
-	// Command to clear the busy flag, occurs before exiting the connection
-	clearBusyFlagCommand = []string{"I 123 0"}
+	// these values are for controlling chambers, which is currently unimplemented
+	//
+	//// cant remember what these are used for
+	//temperatureDataIndex = 105
+	//humidityDataIndex    = 106
+	//lightDataIndex       = 107
+	//
+	//// Conviron Control Sequences
+	//// Give as a comma-seperated list of strings, each string consisting of
+	////  "<Datatype> <Index> <Value>"
+	//
+	//// The init sequence is a sequence of strings passed to the set command which
+	//// "setup" the conviron PCOweb controller to receive the temperature, humidity, and light settings.
+	//initCommand = []string{"I 100 26", "I 101 1", "I 102 1"}
+	//
+	//// The teardown sequence happens at the end of each set of messages
+	//// (not at the end of the connection)
+	//teardownCommand = []string{"I 123 1", "I 121 1"}
+	//
+	//// Command to clear the write flag, occurs after writing but before reloading.
+	//clearWriteFlagCommand = []string{"I 120 0"}
+	//
+	//// Sequence to force reloading of the schedule, to make the written changes go live
+	//reloadSequence = []string{"I 100 7", "I 101 1", "I 102 1"}
+	//
+	//// Command to clear the busy flag, occurs before exiting the connection
+	//clearBusyFlagCommand = []string{"I 123 0"}
 )
 
 const (
@@ -154,6 +156,9 @@ func getValue(conn *telnet.Conn, command string, multiplier float64) (valueRecor
 	time.Sleep(time.Millisecond * 200)
 	// read 1 newline
 	err = conn.SkipUntil("\n")
+	if err != nil {
+		return
+	}
 	time.Sleep(time.Millisecond * 200)
 	// read another coz previous would be ours
 	datad, err := conn.ReadUntil("\n")
@@ -165,7 +170,8 @@ func getValue(conn *telnet.Conn, command string, multiplier float64) (valueRecor
 	// find the ints
 	tmpStrings := match2Ints.FindAllString(data, 2)
 	if len(tmpStrings) == 0 {
-		fmt.Errorf("didnt get any values back from the chamber")
+		err = fmt.Errorf("didnt get any values back from the chamber")
+		return
 	}
 
 	valueRecordedInt, err := strconv.Atoi(tmpStrings[0])
