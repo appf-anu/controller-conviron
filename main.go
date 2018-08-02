@@ -108,32 +108,6 @@ quirks:
 	fmt.Printf(use, os.Args[0])
 }
 
-func init() {
-	hostname, err := os.Hostname()
-	if err != nil {
-		panic(err)
-	}
-	errLog = log.New(os.Stderr, "[conviron] ", log.Ldate|log.Ltime|log.Lshortfile)
-	// get the local zone and offset
-	zoneName, zoneOffset = time.Now().Zone()
-	errLog.Printf("timezone: %s\n", zoneName)
-
-	ctx = fuzzytime.Context{
-		DateResolver: fuzzytime.DMYResolver,
-		TZResolver:   fuzzytime.DefaultTZResolver(zoneName),
-	}
-	flag.Usage = usage
-	flag.BoolVar(&noMetrics, "no-metrics", false, "dont collect metrics")
-	flag.BoolVar(&dummy, "dummy", false, "dont send conditions to chamber")
-	flag.StringVar(&hostTag, "host-tag", hostname, "host tag to add to the measurements")
-	flag.StringVar(&conditionsPath, "conditions", "", "conditions file to")
-	flag.DurationVar(&interval, "interval", time.Minute*10, "interval to run conditions/record metrics at")
-	flag.Parse()
-	if noMetrics && dummy {
-		errLog.Println("dummy and no-metrics specified, nothing to do.")
-		os.Exit(1)
-	}
-}
 
 func parseDateTime(tString string) (time.Time, error) {
 
@@ -340,7 +314,7 @@ func runConditions() {
 
 }
 
-func toInfluxLineProtocol(metricName string, values map[string]interface{}, t int64) {
+func toInfluxLineProtocol(metricName string, values map[string]interface{}, t int64) string {
 
 	keyvaluepairs := make([]string, 0)
 
@@ -372,7 +346,35 @@ func toInfluxLineProtocol(metricName string, values map[string]interface{}, t in
 	str := fmt.Sprintf("%s,host=%s %s", metricName, hostTag, csv)
 	// add timestamp
 	str = fmt.Sprintf("%s %d", str, t)
-	fmt.Fprintln(os.Stdout, str)
+	return str
+}
+
+
+func init() {
+	hostname, err := os.Hostname()
+	if err != nil {
+		panic(err)
+	}
+	errLog = log.New(os.Stderr, "[conviron] ", log.Ldate|log.Ltime|log.Lshortfile)
+	// get the local zone and offset
+	zoneName, zoneOffset = time.Now().Zone()
+	errLog.Printf("timezone: %s\n", zoneName)
+
+	ctx = fuzzytime.Context{
+		DateResolver: fuzzytime.DMYResolver,
+		TZResolver:   fuzzytime.DefaultTZResolver(zoneName),
+	}
+	flag.Usage = usage
+	flag.BoolVar(&noMetrics, "no-metrics", false, "dont collect metrics")
+	flag.BoolVar(&dummy, "dummy", false, "dont send conditions to chamber")
+	flag.StringVar(&hostTag, "host-tag", hostname, "host tag to add to the measurements")
+	flag.StringVar(&conditionsPath, "conditions", "", "conditions file to")
+	flag.DurationVar(&interval, "interval", time.Minute*10, "interval to run conditions/record metrics at")
+	flag.Parse()
+	if noMetrics && dummy {
+		errLog.Println("dummy and no-metrics specified, nothing to do.")
+		os.Exit(1)
+	}
 }
 
 func main() {
@@ -384,35 +386,40 @@ func main() {
 		defer telegrafClient.Close()
 
 	}
-
+	errLog.Println("getting values from "+flag.Arg(0))
 	if interval == time.Second*0 {
 		values, err := getValues(flag.Arg(0))
 		if err != nil {
 			errLog.Println(err)
 			os.Exit(1)
 		}
-		toInfluxLineProtocol("conviron", values, time.Now().UnixNano())
+		//
+		str := toInfluxLineProtocol("conviron", values, time.Now().UnixNano())
+		fmt.Fprintln(os.Stdout, str)
 		os.Exit(0)
 	}
 
 	if !noMetrics && conditionsPath == "" {
 		ticker := time.NewTicker(interval)
-		go func() {
-			for range ticker.C{
-				values, err := getValues(flag.Arg(0))
-				if err != nil {
-					errLog.Println(err)
-				}
-				if telegrafErr == nil {
-					m := telegraf.NewMeasurement("conviron")
-					for k, v := range values {
-						m.AddFloat64(k, v.(float64))
-					}
-					m.AddTag("host", hostTag)
-					telegrafClient.Write(m)
-				}
+
+		for range ticker.C{
+			values, err := getValues(flag.Arg(0))
+			if err != nil {
+				errLog.Println(err)
 			}
-		}()
+			// print the line
+			str := toInfluxLineProtocol("conviron", values, time.Now().UnixNano())
+			fmt.Fprintln(os.Stdout, str)
+			if telegrafErr == nil {
+				m := telegraf.NewMeasurement("conviron")
+				for k, v := range values {
+					m.AddFloat64(k, v.(float64))
+				}
+				m.AddTag("host", hostTag)
+				telegrafClient.Write(m)
+			}
+		}
+
 	}
 
 	if conditionsPath != "" {
