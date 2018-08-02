@@ -4,42 +4,41 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
+	"github.com/bcampbell/fuzzytime"
+	"github.com/mdaffin/go-telegraf"
+	"github.com/ziutek/telnet"
 	"log"
 	"os"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
-	"sort"
-	"github.com/mdaffin/go-telegraf"
-	"github.com/ziutek/telnet"
-	"github.com/bcampbell/fuzzytime"
 )
 
 var (
-	errLog *log.Logger
-	ctx fuzzytime.Context
-	zoneName string
-	zoneOffset int
+	errLog         *log.Logger
+	ctx            fuzzytime.Context
+	zoneName       string
+	zoneOffset     int
 	telegrafClient telegraf.Client
-	telegrafErr error
+	telegrafErr    error
 )
 
 var (
-	noMetrics, dummy bool
-	conditionsPath, hostTag   string
-	interval         time.Duration
+	noMetrics, dummy        bool
+	conditionsPath, hostTag string
+	interval                time.Duration
 )
 
 const (
 	matchFloatExp = `[-+]?\d*\.\d+|\d+`
-	matchIntsExp = `\b(\d+)\b`
+	matchIntsExp  = `\b(\d+)\b`
 )
 
 // TsRegex is a regexp to find a timestamp within a filename
 var /* const */ matchFloat = regexp.MustCompile(matchFloatExp)
 var /* const */ match2Ints = regexp.MustCompile(matchIntsExp)
-
 
 var (
 	// this is used because the convirons do not have an understanding of floating point numbers,
@@ -47,9 +46,9 @@ var (
 	temperatureMultiplier = 10.0
 
 	// cant remember what these are used for
-	TemperatureDataIndex = 105
-	HumidityDataIndex    = 106
-	LightDataIndex       = 107
+	temperatureDataIndex = 105
+	humidityDataIndex    = 106
+	lightDataIndex       = 107
 
 	// Conviron Control Sequences
 	// Give as a comma-seperated list of strings, each string consisting of
@@ -109,7 +108,7 @@ quirks:
 
 func init() {
 	hostname, err := os.Hostname()
-	if err !=nil{
+	if err != nil {
 		panic(err)
 	}
 	errLog = log.New(os.Stderr, "[conviron] ", log.Ldate|log.Ltime|log.Lshortfile)
@@ -149,78 +148,81 @@ func parseDateTime(tString string) (time.Time, error) {
 	return time.Parse("2006-01-02T15:04:05Z07:00", datetimeValue.ISOFormat())
 }
 
-func getValue(conn *telnet.Conn, command string, multiplier float64)(valueRecorded, valueSet float64, err error){
+func getValue(conn *telnet.Conn, command string, multiplier float64) (valueRecorded, valueSet float64, err error) {
 	// write command
-	conn.Write([]byte(command+"\n"))
-	time.Sleep(time.Millisecond*200)
+	conn.Write([]byte(command + "\n"))
+	time.Sleep(time.Millisecond * 200)
 	// read 1 newline
 	err = conn.SkipUntil("\n")
-	time.Sleep(time.Millisecond*200)
+	time.Sleep(time.Millisecond * 200)
 	// read another coz previous would be ours
 	datad, err := conn.ReadUntil("\n")
+	if err != nil {
+		return
+	}
 	// trim...
 	data := strings.TrimSpace(string(datad))
 	// find the ints
 	tmpStrings := match2Ints.FindAllString(data, 2)
 	if len(tmpStrings) == 0 {
-		err = fmt.Errorf("didnt get any values back from the chamber")
+		fmt.Errorf("didnt get any values back from the chamber")
 	}
 
 	valueRecordedInt, err := strconv.Atoi(tmpStrings[0])
-	if err != nil{
+	if err != nil {
 		return
 	}
-	valueRecorded = float64(valueRecordedInt)/multiplier
-	if len(tmpStrings) < 2{
+	valueRecorded = float64(valueRecordedInt) / multiplier
+	if len(tmpStrings) < 2 {
 		valueSet = valueRecorded
 		return
 	}
 	valueSetInt, err := strconv.Atoi(tmpStrings[1])
-	if err != nil{
+	if err != nil {
 		return
 	}
-	valueSet = float64(valueSetInt)/multiplier
+	valueSet = float64(valueSetInt) / multiplier
 	return
 }
 
 func login(conn *telnet.Conn) (err error) {
-	time.Sleep(time.Second*1)
+	time.Sleep(time.Second * 1)
 
 	err = conn.SkipUntil("login: ")
-	if err != nil{
+	if err != nil {
 		return
 	}
 
 	conn.Write([]byte("root\n"))
-	time.Sleep(time.Millisecond*200)
+	time.Sleep(time.Millisecond * 200)
 
 	err = conn.SkipUntil("Password: ")
-	if err != nil{
+	if err != nil {
 		return
 	}
 
 	conn.Write([]byte("froot\n"))
-	time.Sleep(time.Second*1)
+	time.Sleep(time.Second * 1)
 
 	err = conn.SkipUntil("# ")
-	if err != nil{
+	if err != nil {
 		return
 	}
-	time.Sleep(time.Millisecond*200)
+	time.Sleep(time.Millisecond * 200)
 
 	// END login
 	return
 }
 
-func getValues(ip string)(values map[string]interface{}, err error){
+func getValues(ip string) (values map[string]interface{}, err error) {
 	values = make(map[string]interface{})
 	conn, err := telnet.DialTimeout("tcp", ip, time.Second*30)
-	if err != nil{
+	if err != nil {
 		return
 	}
 	defer conn.Close()
 	err = login(conn)
-	if err != nil{
+	if err != nil {
 		return
 	}
 	tempRecorded, tempSet, err := getValue(conn, tempCommand, temperatureMultiplier)
@@ -280,7 +282,7 @@ func runConditions() {
 			continue
 		}
 		// if we are before the time skip until we are after it
-		if theTime.Before(time.Now()){
+		if theTime.Before(time.Now()) {
 			continue
 		}
 
@@ -312,8 +314,8 @@ func runConditions() {
 		// RUN STUFF HERE
 		fmt.Println(theTime, temperature, humidity)
 
-		if !noMetrics{
-			if telegrafErr != nil{
+		if !noMetrics {
+			if telegrafErr != nil {
 				m := telegraf.NewMeasurement("conviron")
 				m.AddFloat64("temp_target", temperature/temperatureMultiplier)
 				m.AddFloat64("humidity_target", humidity)
@@ -326,18 +328,18 @@ func runConditions() {
 		// end RUN STUFF
 
 		idx++
-		errLog.Printf("sleeping for %ds\n",int(time.Until(theTime).Seconds()))
+		errLog.Printf("sleeping for %ds\n", int(time.Until(theTime).Seconds()))
 		time.Sleep(time.Until(theTime))
 	}
 
 }
 
-func toInfluxLineProtocol(metricName string,values map[string]interface{}, t int64) {
+func toInfluxLineProtocol(metricName string, values map[string]interface{}, t int64) {
 
 	keyvaluepairs := make([]string, 0)
 
 	keys := make([]string, 0)
-	for k, _ := range values {
+	for k := range values {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
@@ -352,7 +354,7 @@ func toInfluxLineProtocol(metricName string,values map[string]interface{}, t int
 		case float32:
 			keyvaluepairs = append(keyvaluepairs, fmt.Sprintf("%s=%f", key, v))
 		case string:
-			if v == ""{
+			if v == "" {
 				continue
 			}
 			keyvaluepairs = append(keyvaluepairs, fmt.Sprintf("%s=\"%s\"", key, v))
@@ -367,7 +369,6 @@ func toInfluxLineProtocol(metricName string,values map[string]interface{}, t int
 	fmt.Fprintln(os.Stdout, str)
 }
 
-
 func main() {
 	if !noMetrics {
 		telegrafClient, telegrafErr = telegraf.NewUnix("/tmp/telegraf.sock")
@@ -378,7 +379,7 @@ func main() {
 
 	}
 
-	if interval == time.Second*0{
+	if interval == time.Second*0 {
 		values, err := getValues(flag.Arg(0))
 		if err != nil {
 			errLog.Println(err)
@@ -390,23 +391,19 @@ func main() {
 
 	if !noMetrics && conditionsPath == "" {
 		ticker := time.NewTicker(interval)
-		go func(){
-			for {
-				select {
-					case <- ticker.C:
-						values, err := getValues(flag.Arg(0))
-						if err != nil{
-							errLog.Println(err)
-						}
-						if telegrafErr == nil{
-							m := telegraf.NewMeasurement("conviron")
-							for k, v := range values{
-								m.AddFloat64(k, v.(float64))
-							}
-							m.AddTag("host", hostTag)
-							telegrafClient.Write(m)
-						}
-
+		go func() {
+			for range ticker.C{
+				values, err := getValues(flag.Arg(0))
+				if err != nil {
+					errLog.Println(err)
+				}
+				if telegrafErr == nil {
+					m := telegraf.NewMeasurement("conviron")
+					for k, v := range values {
+						m.AddFloat64(k, v.(float64))
+					}
+					m.AddTag("host", hostTag)
+					telegrafClient.Write(m)
 				}
 			}
 		}()
