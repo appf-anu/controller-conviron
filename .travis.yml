@@ -27,7 +27,7 @@ script:
   # - go build -o ./dht-sensor/dht-sensor ./dht-sensor/dht-sensor
   - GOOS=linux GOARCH=amd64 go build -o controller-conviron_linux_amd64
   - GOOS=linux GOARCH=arm GOARM=7 go build -o controller-conviron_linux_armv7
-  - GOOS=windows GOARCH=amd64 go build -o controller-conviron_win_amd64
+  - GOOS=windows GOARCH=amd64 go build -o controller-conviron_win_amd64.exe
 
 before_deploy:
   - git config --local user.name "gdunstone"
@@ -40,7 +40,7 @@ deploy:
   file:
     - "controller-conviron_linux_amd64"
     - "controller-conviron_linux_armv7"
-    - "controller-conviron_win_amd64"
+    - "controller-conviron_win_amd64.exe"
 
   name: Release $TRAVIS_TAG
   skip_cleanup: true
