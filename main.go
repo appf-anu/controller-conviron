@@ -8,7 +8,9 @@ import (
 	"github.com/mdaffin/go-telegraf"
 	"github.com/ziutek/telnet"
 	"log"
+	"math"
 	"os"
+	"reflect"
 	"regexp"
 	"sort"
 	"strconv"
@@ -26,9 +28,9 @@ var (
 )
 
 var (
-	noMetrics, dummy        bool
-	conditionsPath, hostTag string
-	interval                time.Duration
+	noMetrics, dummy                  bool
+	conditionsPath, hostTag, groupTag string
+	interval                          time.Duration
 )
 
 const (
@@ -36,9 +38,14 @@ const (
 	matchIntsExp  = `\b(\d+)\b`
 )
 
+const (
+	nullTargetInt = math.MinInt64
+	nullTargetFloat = -math.MaxFloat64
+)
+
 // TsRegex is a regexp to find a timestamp within a filename
 var /* const */ matchFloat = regexp.MustCompile(matchFloatExp)
-var /* const */ match2Ints = regexp.MustCompile(matchIntsExp)
+var /* const */ matchInts = regexp.MustCompile(matchIntsExp)
 
 var (
 	// this is used because the convirons do not have an understanding of floating point numbers,
@@ -74,18 +81,94 @@ var (
 	//clearBusyFlagCommand = []string{"I 123 0"}
 )
 
-const (
-	tempCommand = "pcoget 0 A 1 2"
-	rhCommand   = "pcoget 0 I 4 2"
-	parCommand  = "pcoget 0 I 11 1"
-)
+// conviron indices start at 1
+
+// AValues type represent the temperature values for the chamber (I dont know why these are on a different row to
+// everything else, but they are. They also all require dividing by 10.0 because they are returned as integers.)
+type AValues struct {
+	Temperature         float64 `idx:"1" multiplier:"10.0"`
+	TemperatureTarget   float64 `multiplier:"10.0"`
+	TemperatureSetPoint float64 `idx:"2" multiplier:"10.0"`
+	CoilTemperature     float64 `idx:"3" multiplier:"10.0"`
+}
+
+// IValues type represents the other values that aren't temperature, like relative humidity and par
+type IValues struct {
+	HeatCoolModulatingProportionalValve int `idx:"1"`
+	RelativeHumidity                    int `idx:"4"`
+	RelativeHumidityTarget              int
+	RelativeHumuditySetPoint            int `idx:"5"`
+	RelativeHumidityAdd                 int `idx:"6"`
+	Par                                 int `idx:"11"`
+	LightSetPoint                       int `idx:"12"`
+	HiPressure                          int `idx:"33"`
+	LoPressure                          int `idx:"34"`
+	//IPAddressOctet1						int `idx:"47"`
+	//IPAddressOctet2						int `idx:"48"`
+	//IPAddressOctet3						int `idx:"49"`
+	//IPAddressOctet4						int `idx:"50"`
+}
+
+// DecodeValues decodes values in the array `values` and sets the values in the struct based on the `idx` tag,
+// it also divides the values by the multiplier tag (which should be of the same type as the value).
+func DecodeValues(values []int, i interface{}) error {
+	v := reflect.ValueOf(i)
+
+	if v.Kind() != reflect.Ptr || v.IsNil() {
+		return fmt.Errorf("decode requires non-nil pointer")
+	}
+	// get the value that the pointer v points to.
+	v = v.Elem()
+	// get type of v
+	t := v.Type()
+
+	for i := 0; i < v.NumField(); i++ {
+		ft := t.Field(i)
+		// skip unexported fields. from godoc:
+		// PkgPath is the package path that qualifies a lower case (unexported)
+		// field name. It is empty for upper case (exported) field names.
+		if ft.PkgPath != "" {
+			continue
+		}
+		fv := v.Field(i)
+		if idxString, ok := ft.Tag.Lookup("idx"); ok {
+			if idx, err := strconv.ParseInt(idxString, 10, 64); err == nil {
+				// the conviron idx starts at 1
+				idx = idx - 1
+				switch fv.Kind() {
+				case reflect.Int:
+					value := int64(values[idx])
+					if multiplierString, ok := ft.Tag.Lookup("multiplier"); ok {
+						if mult, err := strconv.ParseInt(multiplierString, 10, 64); err == nil {
+							value /= mult
+						}
+					}
+					fv.SetInt(value)
+				case reflect.Float64:
+					floatVal := float64(values[idx])
+					if multiplierString, ok := ft.Tag.Lookup("multiplier"); ok {
+						if mult, err := strconv.ParseFloat(multiplierString, 64); err == nil {
+							floatVal /= mult
+						}
+					}
+					fv.SetFloat(floatVal)
+				case reflect.Bool:
+					fv.SetBool(values[idx] != 0)
+				}
+
+			}
+
+		}
+	}
+	return nil
+}
 
 var usage = func() {
 	use := `
 usage of %s:
 flags:
-	-no-metrics: dont collect or send metrics to telegraf
-	-dummy: dont control the chamber, only collect metrics
+	-no-metrics: don't send metrics to telegraf
+	-dummy: don't control the chamber, only collect metrics (this is implied by not specifying a conditions file
 	-conditions: conditions to use to run the chamber
 	-interval: what interval to run conditions/record metrics at, set to 0s to read 1 metric and exit. (default=10m)
 
@@ -105,9 +188,8 @@ quirks:
 	if both -dummy and -no-metrics are specified, this program will exit.
 
 `
-	fmt.Printf(use, os.Args[0])
+	fmt.Printf(use, os.Args[0], os.Args[0], os.Args[0])
 }
-
 
 func parseDateTime(tString string) (time.Time, error) {
 
@@ -124,7 +206,9 @@ func parseDateTime(tString string) (time.Time, error) {
 	return time.Parse("2006-01-02T15:04:05Z07:00", datetimeValue.ISOFormat())
 }
 
-func getValue(conn *telnet.Conn, command string, multiplier float64) (valueRecorded, valueSet float64, err error) {
+
+func chompAllValues(conn *telnet.Conn, command string) (values []int, err error) {
+
 	// write command
 	conn.Write([]byte(command + "\n"))
 	time.Sleep(time.Millisecond * 200)
@@ -142,26 +226,18 @@ func getValue(conn *telnet.Conn, command string, multiplier float64) (valueRecor
 	// trim...
 	data := strings.TrimSpace(string(datad))
 	// find the ints
-	tmpStrings := match2Ints.FindAllString(data, 2)
+	tmpStrings := matchInts.FindAllString(data, -1)
 	if len(tmpStrings) == 0 {
 		err = fmt.Errorf("didnt get any values back from the chamber")
 		return
 	}
-
-	valueRecordedInt, err := strconv.Atoi(tmpStrings[0])
-	if err != nil {
-		return
+	for _, v := range tmpStrings {
+		i, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			return values, err
+		}
+		values = append(values, int(i))
 	}
-	valueRecorded = float64(valueRecordedInt) / multiplier
-	if len(tmpStrings) < 2 {
-		valueSet = valueRecorded
-		return
-	}
-	valueSetInt, err := strconv.Atoi(tmpStrings[1])
-	if err != nil {
-		return
-	}
-	valueSet = float64(valueSetInt) / multiplier
 	return
 }
 
@@ -194,8 +270,7 @@ func login(conn *telnet.Conn) (err error) {
 	return
 }
 
-func getValues(ip string) (values map[string]interface{}, err error) {
-	values = make(map[string]interface{})
+func getValues(ip string, a *AValues, i *IValues) (err error) {
 	conn, err := telnet.DialTimeout("tcp", ip, time.Second*30)
 	if err != nil {
 		return
@@ -205,18 +280,24 @@ func getValues(ip string) (values map[string]interface{}, err error) {
 	if err != nil {
 		return
 	}
-	tempRecorded, tempSet, err := getValue(conn, tempCommand, temperatureMultiplier)
-	values["temp_recorded"] = tempRecorded
-	values["temp_set"] = tempSet
 
-	// END login
-	humRecorded, humSet, err := getValue(conn, rhCommand, 1)
-	values["humidity_recorded"] = humRecorded
-	values["humidity_set"] = humSet
+	aValues, err := chompAllValues(conn, "pcoget 0 A 1 3")
+	if err != nil {
+		return
+	}
+	iValues, err := chompAllValues(conn, "pcoget 0 I 1 64")
+	if err != nil {
+		return
+	}
 
-	// END login
-	parRecorded, _, err := getValue(conn, parCommand, 1)
-	values["par_recorded"] = parRecorded
+	err = DecodeValues(aValues, a)
+	if err != nil {
+		return
+	}
+	err = DecodeValues(iValues, i)
+	if err != nil {
+		return
+	}
 	return
 }
 
@@ -289,20 +370,25 @@ func runConditions() {
 			errLog.Println("failed parsing temperature float")
 			continue
 		}
+		// make this happen from the struct
 		temperature *= temperatureMultiplier
 
 		// RUN STUFF HERE
 		fmt.Println(theTime, temperature, humidity)
 
-		if !noMetrics {
-			if telegrafErr != nil {
-				m := telegraf.NewMeasurement("conviron")
-				m.AddFloat64("temp_target", temperature/temperatureMultiplier)
-				m.AddFloat64("humidity_target", humidity)
-				m.AddTag("host", hostTag)
-				telegrafClient.Write(m)
-			}
+		a := AValues{TemperatureTarget: temperature}
+		i := IValues{RelativeHumidityTarget: int(math.Round(humidity))}
 
+		err = getValues(flag.Arg(0), &a, &i)
+		if err != nil {
+			return
+		}
+		// RUN STUFF HERE
+		fmt.Println(theTime, a.Temperature, i.RelativeHumidity)
+		fmt.Println(theTime, a.TemperatureTarget, i.RelativeHumidityTarget)
+
+		if !noMetrics {
+			writeMetrics(a, i)
 		}
 
 		// end RUN STUFF
@@ -311,25 +397,94 @@ func runConditions() {
 		errLog.Printf("sleeping for %ds\n", int(time.Until(theTime).Seconds()))
 		time.Sleep(time.Until(theTime))
 	}
+}
+func decodeStructToMeasurement(m *telegraf.Measurement, va reflect.Value, i int) {
+	f := va.Field(i)
+	fi := f.Interface()
+	n := va.Type().Field(i).Name
+
+	switch v := fi.(type) {
+	case int64:
+		if v == nullTargetInt{
+			break
+		}
+		m.AddInt64(n, v)
+	case int32:
+		m.AddInt32(n, v)
+	case int:
+		if v == nullTargetInt{
+			break
+		}
+		m.AddInt(n, v)
+	case float64:
+		if v == nullTargetFloat{
+			break
+		}
+		m.AddFloat64(n, v)
+	case string:
+		m.AddString(n, v)
+	case bool:
+		m.AddBool(n, v)
+	}
+}
+
+func writeMetrics(av AValues, iv IValues) {
+	if telegrafErr != nil {
+		m := telegraf.NewMeasurement("conviron2")
+
+		va := reflect.ValueOf(av).Elem()
+
+		for i := 0; i < va.NumField(); i++ {
+			decodeStructToMeasurement(&m, va, i)
+		}
+		vi := reflect.ValueOf(iv).Elem()
+
+		for i := 0; i < va.NumField(); i++ {
+			decodeStructToMeasurement(&m, vi, i)
+		}
+
+		m.AddTag("host", hostTag)
+		m.AddTag("group", groupTag)
+		telegrafClient.Write(m)
+	}
 
 }
 
-func toInfluxLineProtocol(metricName string, values map[string]interface{}, t int64) string {
+func toInfluxLineProtocol(metricName string, valueStruct interface{}, t int64) string {
+	s := reflect.ValueOf(valueStruct)
 
+	// this will break things so just return emptystring
+	if s.Kind() != reflect.Ptr || s.IsNil() {
+		return ""
+	}
+	// get the value that the pointer v points to.
+	s = s.Elem()
+	typeOfT := s.Type()
 	keyvaluepairs := make([]string, 0)
 
 	keys := make([]string, 0)
-	for k := range values {
-		keys = append(keys, k)
+
+
+	for i := 0; i < s.NumField(); i++ {
+		keys = append(keys, typeOfT.Field(i).Name)
 	}
 	sort.Strings(keys)
 
 	for _, key := range keys {
-		val := values[key]
+		f := s.FieldByName(key)
+		val := f.Interface()
+
+
 		switch v := val.(type) {
 		case int:
+			if v == nullTargetInt{
+				break
+			}
 			keyvaluepairs = append(keyvaluepairs, fmt.Sprintf("%s=%di", key, v))
 		case float64:
+			if v == nullTargetFloat{
+				break
+			}
 			keyvaluepairs = append(keyvaluepairs, fmt.Sprintf("%s=%f", key, v))
 		case float32:
 			keyvaluepairs = append(keyvaluepairs, fmt.Sprintf("%s=%f", key, v))
@@ -343,12 +498,11 @@ func toInfluxLineProtocol(metricName string, values map[string]interface{}, t in
 		}
 	}
 	csv := strings.Join(keyvaluepairs, ",")
-	str := fmt.Sprintf("%s,host=%s %s", metricName, hostTag, csv)
+	str := fmt.Sprintf("%s,host=%s,group=%s %s", metricName, hostTag, groupTag, csv)
 	// add timestamp
 	str = fmt.Sprintf("%s %d", str, t)
 	return str
 }
-
 
 func init() {
 	hostname, err := os.Hostname()
@@ -358,7 +512,6 @@ func init() {
 	errLog = log.New(os.Stderr, "[conviron] ", log.Ldate|log.Ltime|log.Lshortfile)
 	// get the local zone and offset
 	zoneName, zoneOffset = time.Now().Zone()
-	errLog.Printf("timezone: %s\n", zoneName)
 
 	ctx = fuzzytime.Context{
 		DateResolver: fuzzytime.DMYResolver,
@@ -368,6 +521,7 @@ func init() {
 	flag.BoolVar(&noMetrics, "no-metrics", false, "dont collect metrics")
 	flag.BoolVar(&dummy, "dummy", false, "dont send conditions to chamber")
 	flag.StringVar(&hostTag, "host-tag", hostname, "host tag to add to the measurements")
+	flag.StringVar(&groupTag, "group-tag", "nonspc", "host tag to add to the measurements")
 	flag.StringVar(&conditionsPath, "conditions", "", "conditions file to")
 	flag.DurationVar(&interval, "interval", time.Minute*10, "interval to run conditions/record metrics at")
 	flag.Parse()
@@ -375,6 +529,11 @@ func init() {
 		errLog.Println("dummy and no-metrics specified, nothing to do.")
 		os.Exit(1)
 	}
+
+	errLog.Printf("timezone: %s\n", zoneName)
+	errLog.Printf("hostTag: %s\n", hostTag)
+	errLog.Printf("groupTag: %s\n", groupTag)
+	errLog.Printf("address: %s\n", flag.Arg(0))
 }
 
 func main() {
@@ -386,43 +545,51 @@ func main() {
 		defer telegrafClient.Close()
 
 	}
-	errLog.Println("getting values from "+flag.Arg(0))
 	if interval == time.Second*0 {
-		values, err := getValues(flag.Arg(0))
+		a := AValues{TemperatureTarget:nullTargetFloat}
+		i := IValues{RelativeHumidityTarget:nullTargetInt}
+		err := getValues(flag.Arg(0), &a, &i)
 		if err != nil {
 			errLog.Println(err)
 			os.Exit(1)
 		}
-		//
-		str := toInfluxLineProtocol("conviron", values, time.Now().UnixNano())
-		fmt.Fprintln(os.Stdout, str)
+		// print the line
+		stra := toInfluxLineProtocol("conviron2", &a, time.Now().UnixNano())
+		fmt.Fprintln(os.Stdout, stra)
+		stri := toInfluxLineProtocol("conviron2", &i, time.Now().UnixNano())
+		fmt.Fprintln(os.Stdout, stri)
 		os.Exit(0)
 	}
 
-	if !noMetrics && conditionsPath == "" {
+	if !noMetrics && (conditionsPath == "" || dummy) {
 		ticker := time.NewTicker(interval)
+		go func() {
+			for range ticker.C {
 
-		for range ticker.C{
-			values, err := getValues(flag.Arg(0))
-			if err != nil {
-				errLog.Println(err)
-			}
-			// print the line
-			str := toInfluxLineProtocol("conviron", values, time.Now().UnixNano())
-			fmt.Fprintln(os.Stdout, str)
-			if telegrafErr == nil {
-				m := telegraf.NewMeasurement("conviron")
-				for k, v := range values {
-					m.AddFloat64(k, v.(float64))
+				a := AValues{TemperatureTarget:nullTargetFloat}
+				i := IValues{RelativeHumidityTarget:nullTargetInt}
+
+				err := getValues(flag.Arg(0), &a, &i)
+				if err != nil {
+					errLog.Println(err)
+					continue
 				}
-				m.AddTag("host", hostTag)
-				telegrafClient.Write(m)
-			}
-		}
+				// print the line
+				stra := toInfluxLineProtocol("conviron2", &a, time.Now().UnixNano())
+				fmt.Fprintln(os.Stdout, stra)
+				stri := toInfluxLineProtocol("conviron2", &i, time.Now().UnixNano())
+				fmt.Fprintln(os.Stdout, stri)
+				if telegrafErr == nil {
+					writeMetrics(a, i)
 
+				}
+			}
+		}()
+
+		select {}
 	}
 
-	if conditionsPath != "" {
+	if conditionsPath != "" && !dummy {
 		runConditions()
 	}
 
