@@ -39,8 +39,8 @@ const (
 )
 
 const (
-	nullTargetInt = math.MinInt64
-	nullTargetFloat = -math.MaxFloat64
+	nullTargetInt   = math.MinInt32
+	nullTargetFloat = -math.MaxFloat32
 )
 
 // TsRegex is a regexp to find a timestamp within a filename
@@ -144,7 +144,7 @@ func DecodeValues(values []int, i interface{}) error {
 						}
 					}
 					fv.SetInt(value)
-				case reflect.Float64:
+				case reflect.Float64, reflect.Float32:
 					floatVal := float64(values[idx])
 					if multiplierString, ok := ft.Tag.Lookup("multiplier"); ok {
 						if mult, err := strconv.ParseFloat(multiplierString, 64); err == nil {
@@ -205,7 +205,6 @@ func parseDateTime(tString string) (time.Time, error) {
 
 	return time.Parse("2006-01-02T15:04:05Z07:00", datetimeValue.ISOFormat())
 }
-
 
 func chompAllValues(conn *telnet.Conn, command string) (values []int, err error) {
 
@@ -405,19 +404,19 @@ func decodeStructToMeasurement(m *telegraf.Measurement, va reflect.Value, i int)
 
 	switch v := fi.(type) {
 	case int64:
-		if v == nullTargetInt{
+		if v == nullTargetInt {
 			break
 		}
 		m.AddInt64(n, v)
 	case int32:
 		m.AddInt32(n, v)
 	case int:
-		if v == nullTargetInt{
+		if v == nullTargetInt {
 			break
 		}
 		m.AddInt(n, v)
 	case float64:
-		if v == nullTargetFloat{
+		if v == nullTargetFloat {
 			break
 		}
 		m.AddFloat64(n, v)
@@ -464,7 +463,6 @@ func toInfluxLineProtocol(metricName string, valueStruct interface{}, t int64) s
 
 	keys := make([]string, 0)
 
-
 	for i := 0; i < s.NumField(); i++ {
 		keys = append(keys, typeOfT.Field(i).Name)
 	}
@@ -474,15 +472,14 @@ func toInfluxLineProtocol(metricName string, valueStruct interface{}, t int64) s
 		f := s.FieldByName(key)
 		val := f.Interface()
 
-
 		switch v := val.(type) {
 		case int:
-			if v == nullTargetInt{
+			if v == nullTargetInt {
 				break
 			}
 			keyvaluepairs = append(keyvaluepairs, fmt.Sprintf("%s=%di", key, v))
 		case float64:
-			if v == nullTargetFloat{
+			if v == nullTargetFloat {
 				break
 			}
 			keyvaluepairs = append(keyvaluepairs, fmt.Sprintf("%s=%f", key, v))
@@ -546,8 +543,8 @@ func main() {
 
 	}
 	if interval == time.Second*0 {
-		a := AValues{TemperatureTarget:nullTargetFloat}
-		i := IValues{RelativeHumidityTarget:nullTargetInt}
+		a := AValues{TemperatureTarget: nullTargetFloat}
+		i := IValues{RelativeHumidityTarget: nullTargetInt}
 		err := getValues(flag.Arg(0), &a, &i)
 		if err != nil {
 			errLog.Println(err)
@@ -566,8 +563,8 @@ func main() {
 		go func() {
 			for range ticker.C {
 
-				a := AValues{TemperatureTarget:nullTargetFloat}
-				i := IValues{RelativeHumidityTarget:nullTargetInt}
+				a := AValues{TemperatureTarget: nullTargetFloat}
+				i := IValues{RelativeHumidityTarget: nullTargetInt}
 
 				err := getValues(flag.Arg(0), &a, &i)
 				if err != nil {
