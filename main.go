@@ -38,10 +38,6 @@ const (
 	matchIntsExp  = `\b(\d+)\b`
 )
 
-const (
-	nullTargetInt   = math.MinInt32
-	nullTargetFloat = -math.MaxFloat32
-)
 
 // TsRegex is a regexp to find a timestamp within a filename
 var /* const */ matchFloat = regexp.MustCompile(matchFloatExp)
@@ -79,6 +75,14 @@ var (
 	//
 	//// Command to clear the busy flag, occurs before exiting the connection
 	//clearBusyFlagCommand = []string{"I 123 0"}
+)
+
+const (
+	// it is extremely unlikely (see. impossible) that we will be measuring a humidity of 214,748,365 %RH or a
+	// temperature of -340,282,346,638,528,859,811,704,183,484,516,925,440°C until we invent some new physics, so until
+	// then, I will use these values as the unset or null values for HumidityTarget and TemperatureTarget
+	nullTargetInt   = math.MinInt32
+	nullTargetFloat = -math.MaxFloat32
 )
 
 // conviron indices start at 1
