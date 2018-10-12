@@ -19,16 +19,15 @@ import (
 )
 
 var (
-	errLog         *log.Logger
-	ctx            fuzzytime.Context
-	zoneName       string
-	zoneOffset     int
-	telegrafClient telegraf.Client
-	telegrafErr    error
+	errLog     *log.Logger
+	ctx        fuzzytime.Context
+	zoneName   string
+	zoneOffset int
 )
 
 var (
 	noMetrics, dummy                  bool
+	address                           string
 	conditionsPath, hostTag, groupTag string
 	interval                          time.Duration
 )
@@ -37,7 +36,6 @@ const (
 	matchFloatExp = `[-+]?\d*\.\d+|\d+`
 	matchIntsExp  = `\b(\d+)\b`
 )
-
 
 // TsRegex is a regexp to find a timestamp within a filename
 var /* const */ matchFloat = regexp.MustCompile(matchFloatExp)
@@ -51,8 +49,8 @@ var (
 	// these values are for controlling chambers, which is currently unimplemented
 	//
 	//// cant remember what these are used for
-	//temperatureDataIndex = 105
-	//humidityDataIndex    = 106
+	temperatureDataIndex = 105
+	humidityDataIndex    = 106
 	//lightDataIndex       = 107
 	//
 	//// Conviron Control Sequences
@@ -61,20 +59,20 @@ var (
 	//
 	//// The init sequence is a sequence of strings passed to the set command which
 	//// "setup" the conviron PCOweb controller to receive the temperature, humidity, and light settings.
-	//initCommand = []string{"I 100 26", "I 101 1", "I 102 1"}
-	//
+	initCommand = []string{"pcoset 0 I 100 26\n", "pcoset 0 I 101 1\n", "pcoset 0 I 102 1\n"}
+
 	//// The teardown sequence happens at the end of each set of messages
 	//// (not at the end of the connection)
-	//teardownCommand = []string{"I 123 1", "I 121 1"}
-	//
+	teardownCommand = []string{"pcoset 0 I 123 1\n", "pcoset 0 I 121 1\n"}
+
 	//// Command to clear the write flag, occurs after writing but before reloading.
-	//clearWriteFlagCommand = []string{"I 120 0"}
-	//
+	clearWriteFlagCommand = []string{"pcoset 0 I 120 0\n"}
+
 	//// Sequence to force reloading of the schedule, to make the written changes go live
-	//reloadSequence = []string{"I 100 7", "I 101 1", "I 102 1"}
+	reloadSequence = []string{"pcoset 0 I 100 7\n", "pcoset 0 I 101 1\n", "pcoset 0 I 102 1\n"}
 	//
 	//// Command to clear the busy flag, occurs before exiting the connection
-	//clearBusyFlagCommand = []string{"I 123 0"}
+	clearBusyFlagCommand = []string{"pcoset 0 I 123 0\n"}
 )
 
 const (
@@ -98,6 +96,7 @@ type AValues struct {
 
 // IValues type represents the other values that aren't temperature, like relative humidity and par
 type IValues struct {
+	Success                             string
 	HeatCoolModulatingProportionalValve int `idx:"1"`
 	RelativeHumidity                    int `idx:"4"`
 	RelativeHumidityTarget              int
@@ -273,8 +272,8 @@ func login(conn *telnet.Conn) (err error) {
 	return
 }
 
-func getValues(ip string, a *AValues, i *IValues) (err error) {
-	conn, err := telnet.DialTimeout("tcp", ip, time.Second*30)
+func getValues(a *AValues, i *IValues) (err error) {
+	conn, err := telnet.DialTimeout("tcp", address, time.Second*30)
 	if err != nil {
 		return
 	}
@@ -301,6 +300,72 @@ func getValues(ip string, a *AValues, i *IValues) (err error) {
 	if err != nil {
 		return
 	}
+	return
+}
+
+func writeValues(a *AValues, i *IValues) (err error) {
+
+	conn, err := telnet.DialTimeout("tcp", address, time.Second*30)
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+	err = login(conn)
+	if err != nil {
+		return
+	}
+
+	var runSequence = func(seq []string) (err error) {
+		for _, cmd := range seq {
+			_, err = chompAllValues(conn, cmd)
+			if err != nil {
+				return
+			}
+		}
+		time.Sleep(2)
+		return nil
+	}
+
+	// make this happen from the struct
+	tempCommand := fmt.Sprintf("pcoset 0 I %d %d\n", temperatureDataIndex, int(a.TemperatureTarget*temperatureMultiplier))
+	humCommand := fmt.Sprintf("pcoset 0 I %d %d\n", humidityDataIndex, int(i.RelativeHumidityTarget))
+
+	command_list := []string{}
+	// concat initCommand to command list
+	command_list = append(command_list, initCommand...)
+	// run tempCommand and humcommand
+	command_list = append(command_list, tempCommand, humCommand)
+	// teardown
+	command_list = append(command_list, teardownCommand...)
+	if err = runSequence(command_list); err != nil {
+		return
+	}
+
+	command_list = []string{}
+	// clear write flag
+	command_list = append(command_list, clearWriteFlagCommand...)
+	if err = runSequence(command_list); err != nil {
+		return
+	}
+
+	command_list = []string{}
+	// reload
+	command_list = append(command_list, reloadSequence...)
+	// teardown again
+	command_list = append(command_list, teardownCommand...)
+	if err = runSequence(command_list); err != nil {
+		return
+	}
+
+	command_list = []string{}
+	// clear write flag again
+	command_list = append(command_list, clearWriteFlagCommand...)
+	// finally clear busy flag
+	command_list = append(command_list, clearBusyFlagCommand...)
+	if err = runSequence(command_list); err != nil {
+		return
+	}
+
 	return
 }
 
@@ -373,28 +438,28 @@ func runConditions() {
 			errLog.Println("failed parsing temperature float")
 			continue
 		}
-		// make this happen from the struct
-		temperature *= temperatureMultiplier
 
 		// RUN STUFF HERE
-		fmt.Println(theTime, temperature, humidity)
-
 		a := AValues{TemperatureTarget: temperature}
 		i := IValues{RelativeHumidityTarget: int(math.Round(humidity))}
 
-		err = getValues(flag.Arg(0), &a, &i)
+		err = getValues(&a, &i)
 		if err != nil {
-			return
+			errLog.Println(err)
+			time.Sleep(time.Second * 10)
+			continue
 		}
-		// RUN STUFF HERE
-		fmt.Println(theTime, a.Temperature, i.RelativeHumidity)
-		fmt.Println(theTime, a.TemperatureTarget, i.RelativeHumidityTarget)
-
-		if !noMetrics {
-			writeMetrics(a, i)
+		errLog.Printf("t %s \tt:\t%d\trh:%d \n", theTime, int(a.TemperatureTarget), int(i.RelativeHumidityTarget))
+		errLog.Printf("c %s \tt:\t%d\trh:%d \n", theTime, int(a.Temperature), int(i.RelativeHumidity))
+		i.Success = "SUCCESS"
+		if err = writeValues(&a, &i); err != nil {
+			errLog.Println(err)
+			i.Success = err.Error()
 		}
 
 		// end RUN STUFF
+
+		writeMetrics(a, i)
 
 		idx++
 		errLog.Printf("sleeping for %ds\n", int(time.Until(theTime).Seconds()))
@@ -432,7 +497,20 @@ func decodeStructToMeasurement(m *telegraf.Measurement, va reflect.Value, i int)
 }
 
 func writeMetrics(av AValues, iv IValues) {
-	if telegrafErr != nil {
+
+	if !noMetrics {
+		telegrafHost := "telegraf:8092"
+		if os.Getenv("TELEGRAF_HOST") != "" {
+			telegrafHost = os.Getenv("TELEGRAF_HOST")
+		}
+
+		telegrafClient, err := telegraf.NewUDP(telegrafHost)
+		if err != nil {
+			errLog.Println(err)
+			return
+		}
+		defer telegrafClient.Close()
+
 		m := telegraf.NewMeasurement("conviron2")
 
 		va := reflect.ValueOf(av).Elem()
@@ -449,8 +527,8 @@ func writeMetrics(av AValues, iv IValues) {
 		m.AddTag("host", hostTag)
 		m.AddTag("group", groupTag)
 		telegrafClient.Write(m)
-	}
 
+	}
 }
 
 func toInfluxLineProtocol(metricName string, valueStruct interface{}, t int64) string {
@@ -506,10 +584,22 @@ func toInfluxLineProtocol(metricName string, valueStruct interface{}, t int64) s
 }
 
 func init() {
-	hostname, err := os.Hostname()
-	if err != nil {
-		panic(err)
+	var err error
+	hostname := os.Getenv("NAME")
+	if hostname == "" {
+		hostname, err = os.Hostname()
+		if err != nil {
+			panic(err)
+		}
 	}
+
+	if address = os.Getenv("ADDRESS"); address == "" {
+		address = flag.Arg(0)
+		if err != nil {
+			panic(err)
+		}
+	}
+
 	errLog = log.New(os.Stderr, "[conviron] ", log.Ldate|log.Ltime|log.Lshortfile)
 	// get the local zone and offset
 	zoneName, zoneOffset = time.Now().Zone()
@@ -520,36 +610,63 @@ func init() {
 	}
 	flag.Usage = usage
 	flag.BoolVar(&noMetrics, "no-metrics", false, "dont collect metrics")
+	if tempV := strings.ToLower(os.Getenv("NO_METRICS")); tempV != "" {
+		if tempV == "true" || tempV == "1" {
+			noMetrics = true
+		} else {
+			noMetrics = false
+		}
+	}
+
 	flag.BoolVar(&dummy, "dummy", false, "dont send conditions to chamber")
+	if tempV := strings.ToLower(os.Getenv("DUMMY")); tempV != "" {
+		if tempV == "true" || tempV == "1" {
+			dummy = true
+		} else {
+			dummy = false
+		}
+	}
 	flag.StringVar(&hostTag, "host-tag", hostname, "host tag to add to the measurements")
+	if tempV := os.Getenv("HOST_TAG"); tempV != "" {
+		hostTag = tempV
+	}
+
 	flag.StringVar(&groupTag, "group-tag", "nonspc", "host tag to add to the measurements")
+
+	if tempV := os.Getenv("GROUP_TAG"); tempV != "" {
+		groupTag = tempV
+	}
+
 	flag.StringVar(&conditionsPath, "conditions", "", "conditions file to")
+
+	if tempV := os.Getenv("CONDITIONS_FILE"); tempV != "" {
+		conditionsPath = tempV
+	}
 	flag.DurationVar(&interval, "interval", time.Minute*10, "interval to run conditions/record metrics at")
+	if tempV := os.Getenv("INTERVAL"); tempV != "" {
+		conditionsPath = tempV
+	}
 	flag.Parse()
+
 	if noMetrics && dummy {
 		errLog.Println("dummy and no-metrics specified, nothing to do.")
 		os.Exit(1)
 	}
 
-	errLog.Printf("timezone: %s\n", zoneName)
-	errLog.Printf("hostTag: %s\n", hostTag)
-	errLog.Printf("groupTag: %s\n", groupTag)
-	errLog.Printf("address: %s\n", flag.Arg(0))
+	errLog.Printf("timezone: \t%s\n", zoneName)
+	errLog.Printf("hostTag: \t%s\n", hostTag)
+	errLog.Printf("groupTag: \t%s\n", groupTag)
+	errLog.Printf("address: \t%s\n", address)
+	errLog.Printf("file: \t%s\n", conditionsPath)
+	errLog.Printf("interval: \t%s\n", interval)
 }
 
 func main() {
-	if !noMetrics {
-		telegrafClient, telegrafErr = telegraf.NewUnix("/tmp/telegraf.sock")
-		if telegrafErr != nil {
-			errLog.Println(telegrafErr)
-		}
-		defer telegrafClient.Close()
 
-	}
 	if interval == time.Second*0 {
 		a := AValues{TemperatureTarget: nullTargetFloat}
 		i := IValues{RelativeHumidityTarget: nullTargetInt}
-		err := getValues(flag.Arg(0), &a, &i)
+		err := getValues(&a, &i)
 		if err != nil {
 			errLog.Println(err)
 			os.Exit(1)
@@ -570,7 +687,7 @@ func main() {
 				a := AValues{TemperatureTarget: nullTargetFloat}
 				i := IValues{RelativeHumidityTarget: nullTargetInt}
 
-				err := getValues(flag.Arg(0), &a, &i)
+				err := getValues(&a, &i)
 				if err != nil {
 					errLog.Println(err)
 					continue
@@ -580,10 +697,8 @@ func main() {
 				fmt.Fprintln(os.Stdout, stra)
 				stri := toInfluxLineProtocol("conviron2", &i, time.Now().UnixNano())
 				fmt.Fprintln(os.Stdout, stri)
-				if telegrafErr == nil {
-					writeMetrics(a, i)
+				writeMetrics(a, i)
 
-				}
 			}
 		}()
 
