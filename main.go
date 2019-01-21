@@ -369,7 +369,9 @@ func writeValues(a *AValues, i *IValues) (err error) {
 	return
 }
 
+
 func runConditions() {
+	errLog.Printf("running conditions file: %s\n", conditionsPath)
 	file, err := os.Open(conditionsPath)
 	if err != nil {
 		log.Fatal(err)
@@ -377,95 +379,107 @@ func runConditions() {
 	defer file.Close()
 	scanner := bufio.NewScanner(file)
 	idx := 0
-	oldIndices := true
-
+	var lastTime time.Time
+	var lastLineSplit []string
+	firstRun := true
 	for scanner.Scan() {
 		line := scanner.Text()
 		if idx == 0 {
-			if line[:8] == "datetime" {
-				oldIndices = false
-			}
 			idx++
 			continue
 		}
 
 		lineSplit := strings.Split(line, ",")
-		var theTime time.Time
-
-		var timeStr, humidityStr, temperatureStr string
-		var temperature, humidity float64
-
-		if oldIndices {
-			timeStr = lineSplit[0] + " " + lineSplit[1]
-			temperatureStr = lineSplit[2]
-			humidityStr = lineSplit[3]
-
-		} else {
-			timeStr = lineSplit[0]
-			temperatureStr = lineSplit[1]
-			humidityStr = lineSplit[2]
-		}
+		timeStr := lineSplit[0]
 		theTime, err := parseDateTime(timeStr)
 		if err != nil {
 			errLog.Println(err)
 			continue
 		}
+
 		// if we are before the time skip until we are after it
-		if theTime.Before(time.Now()) {
+		// the -10s means that we shouldnt run again.
+		if theTime.Before(time.Now()){
+			lastLineSplit = lineSplit
+			lastTime = theTime
 			continue
 		}
 
-		foundHum := matchFloat.FindString(humidityStr)
-		if len(foundHum) < 0 {
-			errLog.Println("no humidity value found")
-			continue
+		if firstRun {
+			firstRun = false
+			errLog.Println("running firstrun line")
+			for i:=0; i < 10; i++{
+				if runStuff(lastTime, lastLineSplit) {
+					break
+				}
+			}
 		}
 
-		humidity, err = strconv.ParseFloat(foundHum, 64)
-		if err != nil {
-			errLog.Println("failed parsing humidity float")
-			continue
-		}
-
-		foundTemp := matchFloat.FindString(temperatureStr)
-		if len(foundTemp) < 0 {
-			errLog.Println("no temperature value found")
-			continue
-		}
-
-		temperature, err = strconv.ParseFloat(foundTemp, 64)
-		if err != nil {
-			errLog.Println("failed parsing temperature float")
-			continue
-		}
+		errLog.Printf("sleeping for %ds\n",int(time.Until(theTime).Seconds()))
+		time.Sleep(time.Until(theTime))
 
 		// RUN STUFF HERE
-		a := AValues{TemperatureTarget: temperature}
-		i := IValues{RelativeHumidityTarget: int(math.Round(humidity))}
-
-		err = getValues(&a, &i)
-		if err != nil {
-			errLog.Println(err)
-			time.Sleep(time.Second * 10)
-			continue
+		for i:=0; i < 10; i++{
+			if runStuff(theTime, lineSplit) {
+				break
+			}
 		}
-		errLog.Printf("t %s \tt:\t%d\trh:%d \n", theTime, int(a.TemperatureTarget), int(i.RelativeHumidityTarget))
-		errLog.Printf("c %s \tt:\t%d\trh:%d \n", theTime, int(a.Temperature), int(i.RelativeHumidity))
-		i.Success = "SUCCESS"
-		if err = writeValues(&a, &i); err != nil {
-			errLog.Println(err)
-			i.Success = err.Error()
-		}
-
 		// end RUN STUFF
-
-		writeMetrics(a, i)
-
 		idx++
-		errLog.Printf("sleeping for %ds\n", int(time.Until(theTime).Seconds()))
-		time.Sleep(time.Until(theTime))
 	}
 }
+
+
+// runStuff, should send values and write metrics.
+// returns true if program should continue, false if program should retry
+func runStuff(theTime time.Time, lineSplit []string) bool {
+
+	foundHum := matchFloat.FindString(lineSplit[3])
+	if len(foundHum) < 0 {
+		errLog.Println("no humidity value found")
+		return true
+	}
+
+	humidity, err := strconv.ParseFloat(foundHum, 64)
+	if err != nil {
+		errLog.Println("failed parsing humidity float")
+		return true
+	}
+
+	foundTemp := matchFloat.FindString(lineSplit[2])
+	if len(foundTemp) < 0 {
+		errLog.Println("no temperature value found")
+		return true
+	}
+
+	temperature, err := strconv.ParseFloat(foundTemp, 64)
+	if err != nil {
+		errLog.Println("failed parsing temperature float")
+		return true
+	}
+
+	// RUN STUFF HERE
+	a := AValues{TemperatureTarget: temperature}
+	i := IValues{RelativeHumidityTarget: int(math.Round(humidity))}
+
+	err = getValues(&a, &i)
+	if err != nil {
+		errLog.Println(err)
+		time.Sleep(time.Second * 10)
+		return false
+	}
+	errLog.Printf("t %s \tt:\t%d\trh:%d \n", theTime, int(a.TemperatureTarget), int(i.RelativeHumidityTarget))
+	errLog.Printf("c %s \tt:\t%d\trh:%d \n", theTime, int(a.Temperature), int(i.RelativeHumidity))
+	i.Success = "SUCCESS"
+	if err = writeValues(&a, &i); err != nil {
+		errLog.Println(err)
+		i.Success = err.Error()
+	}
+
+	writeMetrics(a, i)
+	return true
+}
+
 func decodeStructToMeasurement(m *telegraf.Measurement, va reflect.Value, i int) {
 	f := va.Field(i)
 	fi := f.Interface()
