@@ -536,9 +536,12 @@ func writeMetrics(av AValues, iv IValues) {
 		for i := 0; i < vi.NumField(); i++ {
 			decodeStructToMeasurement(&m, vi, i)
 		}
-
-		m.AddTag("host", hostTag)
-		m.AddTag("group", groupTag)
+		if hostTag != "" {
+			m.AddTag("host", hostTag)
+		}
+		if groupTag != "" {
+			m.AddTag("group", groupTag)
+		}
 		telegrafClient.Write(m)
 
 	}
@@ -599,12 +602,6 @@ func toInfluxLineProtocol(metricName string, valueStruct interface{}, t int64) s
 func init() {
 	var err error
 	hostname := os.Getenv("NAME")
-	if hostname == "" {
-		hostname, err = os.Hostname()
-		if err != nil {
-			panic(err)
-		}
-	}
 
 	if address = os.Getenv("ADDRESS"); address == "" {
 		address = flag.Arg(0)
