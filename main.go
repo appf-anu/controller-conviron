@@ -100,7 +100,7 @@ type IValues struct {
 	HeatCoolModulatingProportionalValve int `idx:"1"`
 	RelativeHumidity                    int `idx:"4"`
 	RelativeHumidityTarget              int
-	RelativeHumuditySetPoint            int `idx:"5"`
+	RelativeHumiditySetPoint            int `idx:"5"`
 	RelativeHumidityAdd                 int `idx:"6"`
 	Par                                 int `idx:"11"`
 	LightSetPoint                       int `idx:"12"`
@@ -527,14 +527,13 @@ func writeMetrics(av AValues, iv IValues) {
 
 		m := telegraf.NewMeasurement("conviron2")
 
-		va := reflect.ValueOf(av).Elem()
-
+		va := reflect.ValueOf(&av).Elem()
 		for i := 0; i < va.NumField(); i++ {
 			decodeStructToMeasurement(&m, va, i)
 		}
-		vi := reflect.ValueOf(iv).Elem()
 
-		for i := 0; i < va.NumField(); i++ {
+		vi := reflect.ValueOf(&iv).Elem()
+		for i := 0; i < vi.NumField(); i++ {
 			decodeStructToMeasurement(&m, vi, i)
 		}
 
@@ -658,7 +657,11 @@ func init() {
 	}
 	flag.DurationVar(&interval, "interval", time.Minute*10, "interval to run conditions/record metrics at")
 	if tempV := os.Getenv("INTERVAL"); tempV != "" {
-		conditionsPath = tempV
+		interval, err = time.ParseDuration(tempV)
+		if err != nil {
+			errLog.Println("Couldnt parse interval from environment")
+			errLog.Println(err)
+		}
 	}
 	flag.Parse()
 
@@ -694,10 +697,25 @@ func main() {
 	}
 
 	if !noMetrics && (conditionsPath == "" || dummy) {
+
+		a := AValues{TemperatureTarget: nullTargetFloat}
+		i := IValues{RelativeHumidityTarget: nullTargetInt}
+
+		err := getValues(&a, &i)
+		if err != nil {
+			errLog.Println(err)
+		} else {
+			// print the line
+			stra := toInfluxLineProtocol("conviron2", &a, time.Now().UnixNano())
+			fmt.Fprintln(os.Stdout, stra)
+			stri := toInfluxLineProtocol("conviron2", &i, time.Now().UnixNano())
+			fmt.Fprintln(os.Stdout, stri)
+			writeMetrics(a, i)
+		}
+
 		ticker := time.NewTicker(interval)
 		go func() {
 			for range ticker.C {
-
 				a := AValues{TemperatureTarget: nullTargetFloat}
 				i := IValues{RelativeHumidityTarget: nullTargetInt}
 
@@ -706,16 +724,15 @@ func main() {
 					errLog.Println(err)
 					continue
 				}
+
 				// print the line
 				stra := toInfluxLineProtocol("conviron2", &a, time.Now().UnixNano())
 				fmt.Fprintln(os.Stdout, stra)
 				stri := toInfluxLineProtocol("conviron2", &i, time.Now().UnixNano())
 				fmt.Fprintln(os.Stdout, stri)
 				writeMetrics(a, i)
-
 			}
 		}()
-
 		select {}
 	}
 
