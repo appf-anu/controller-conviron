@@ -26,10 +26,10 @@ var (
 )
 
 var (
-	noMetrics, dummy                  bool
-	address                           string
-	conditionsPath, hostTag, groupTag string
-	interval                          time.Duration
+	noMetrics, dummy                           bool
+	address                                    string
+	conditionsPath, hostTag, groupTag, userTag string
+	interval                                   time.Duration
 )
 
 const (
@@ -229,10 +229,6 @@ func chompAllValues(conn *telnet.Conn, command string) (values []int, err error)
 	data := strings.TrimSpace(string(datad))
 	// find the ints
 	tmpStrings := matchInts.FindAllString(data, -1)
-	if len(tmpStrings) == 0 {
-		err = fmt.Errorf("didnt get any values back from the chamber")
-		return
-	}
 	for _, v := range tmpStrings {
 		i, err := strconv.ParseInt(v, 10, 64)
 		if err != nil {
@@ -369,7 +365,6 @@ func writeValues(a *AValues, i *IValues) (err error) {
 	return
 }
 
-
 func runConditions() {
 	errLog.Printf("running conditions file: %s\n", conditionsPath)
 	file, err := os.Open(conditionsPath)
@@ -399,7 +394,7 @@ func runConditions() {
 
 		// if we are before the time skip until we are after it
 		// the -10s means that we shouldnt run again.
-		if theTime.Before(time.Now()){
+		if theTime.Before(time.Now()) {
 			lastLineSplit = lineSplit
 			lastTime = theTime
 			continue
@@ -408,18 +403,18 @@ func runConditions() {
 		if firstRun {
 			firstRun = false
 			errLog.Println("running firstrun line")
-			for i:=0; i < 10; i++{
+			for i := 0; i < 10; i++ {
 				if runStuff(lastTime, lastLineSplit) {
 					break
 				}
 			}
 		}
 
-		errLog.Printf("sleeping for %ds\n",int(time.Until(theTime).Seconds()))
+		errLog.Printf("sleeping for %ds\n", int(time.Until(theTime).Seconds()))
 		time.Sleep(time.Until(theTime))
 
 		// RUN STUFF HERE
-		for i:=0; i < 10; i++{
+		for i := 0; i < 10; i++ {
 			if runStuff(theTime, lineSplit) {
 				break
 			}
@@ -428,7 +423,6 @@ func runConditions() {
 		idx++
 	}
 }
-
 
 // runStuff, should send values and write metrics.
 // returns true if program should continue, false if program should retry
@@ -542,8 +536,11 @@ func writeMetrics(av AValues, iv IValues) {
 		if groupTag != "" {
 			m.AddTag("group", groupTag)
 		}
-		telegrafClient.Write(m)
+		if userTag != "" {
+			m.AddTag("user", userTag)
+		}
 
+		telegrafClient.Write(m)
 	}
 }
 
@@ -636,19 +633,23 @@ func init() {
 			dummy = false
 		}
 	}
+
 	flag.StringVar(&hostTag, "host-tag", hostname, "host tag to add to the measurements")
 	if tempV := os.Getenv("HOST_TAG"); tempV != "" {
 		hostTag = tempV
 	}
 
 	flag.StringVar(&groupTag, "group-tag", "nonspc", "host tag to add to the measurements")
-
 	if tempV := os.Getenv("GROUP_TAG"); tempV != "" {
 		groupTag = tempV
 	}
 
-	flag.StringVar(&conditionsPath, "conditions", "", "conditions file to")
+	flag.StringVar(&userTag, "user-tag", "", "user specified tag")
+	if tempV := os.Getenv("USER_TAG"); tempV != "" {
+		userTag = tempV
+	}
 
+	flag.StringVar(&conditionsPath, "conditions", "", "conditions file to")
 	if tempV := os.Getenv("CONDITIONS_FILE"); tempV != "" {
 		conditionsPath = tempV
 	}
