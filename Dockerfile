@@ -1,4 +1,4 @@
-FROM resin/raspberry-pi-alpine:latest
+FROM alpine:latest
 RUN apk add --no-cache tzdata
 COPY controller-conviron /bin
 VOLUME /data

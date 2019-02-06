@@ -1,5 +1,0 @@
-FROM amd64/alpine:latest
-RUN apk add --no-cache tzdata
-COPY controller-conviron /bin
-VOLUME /data
-ENTRYPOINT ["controller-conviron"]
