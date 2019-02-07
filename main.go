@@ -27,6 +27,7 @@ var (
 
 var (
 	noMetrics, dummy                           bool
+	useLight1,useLight2                        bool
 	address                                    string
 	conditionsPath, hostTag, groupTag, userTag string
 	interval                                   time.Duration
@@ -46,12 +47,11 @@ var (
 	// therefore 21.6c == 216 is used
 	temperatureMultiplier = 10.0
 
-	// these values are for controlling chambers, which is currently unimplemented
-	//
-	//// cant remember what these are used for
+	// these values are for controlling chambers
 	temperatureDataIndex = 105
 	humidityDataIndex    = 106
-	//lightDataIndex       = 107
+	light1DataIndex      = 107
+	light2DataIndex      = 108
 	//
 	//// Conviron Control Sequences
 	//// Give as a comma-seperated list of strings, each string consisting of
@@ -62,8 +62,9 @@ var (
 	initCommand = []string{"pcoset 0 I 100 26\n", "pcoset 0 I 101 1\n", "pcoset 0 I 102 1\n"}
 
 	//// The teardown sequence happens at the end of each set of messages
+
 	//// (not at the end of the connection)
-	teardownCommand = []string{"pcoset 0 I 123 1\n", "pcoset 0 I 121 1\n"}
+	teardownCommand = []string{"pcoset 0 I 121 1\n"}
 
 	//// Command to clear the write flag, occurs after writing but before reloading.
 	clearWriteFlagCommand = []string{"pcoset 0 I 120 0\n"}
@@ -73,8 +74,11 @@ var (
 	//
 	//// Command to clear the busy flag, occurs before exiting the connection
 	clearBusyFlagCommand = []string{"pcoset 0 I 123 0\n"}
+	//// Command to set the busy flag
+	setBusyFlagCommand = []string{"pcoset 0 I 123 1\n"}
 )
 
+// conviron indices start at 1
 const (
 	// it is extremely unlikely (see. impossible) that we will be measuring a humidity of 214,748,365 %RH or a
 	// temperature of -340,282,346,638,528,859,811,704,183,484,516,925,440°C until we invent some new physics, so until
@@ -82,8 +86,6 @@ const (
 	nullTargetInt   = math.MinInt32
 	nullTargetFloat = -math.MaxFloat32
 )
-
-// conviron indices start at 1
 
 // AValues type represent the temperature values for the chamber (I dont know why these are on a different row to
 // everything else, but they are. They also all require dividing by 10.0 because they are returned as integers.)
@@ -103,7 +105,10 @@ type IValues struct {
 	RelativeHumiditySetPoint            int `idx:"5"`
 	RelativeHumidityAdd                 int `idx:"6"`
 	Par                                 int `idx:"11"`
-	LightSetPoint                       int `idx:"12"`
+	Light1SetPoint                      int `idx:"12"`
+	Light1Target                        int
+	//Light1SetPoint                      int `idx:"12"`
+	Light2Target                        int
 	HiPressure                          int `idx:"33"`
 	LoPressure                          int `idx:"34"`
 	//IPAddressOctet1						int `idx:"47"`
@@ -213,15 +218,15 @@ func chompAllValues(conn *telnet.Conn, command string) (values []int, err error)
 
 	// write command
 	conn.Write([]byte(command + "\n"))
-	time.Sleep(time.Millisecond * 200)
 	// read 1 newline
 	err = conn.SkipUntil("\n")
 	if err != nil {
 		return
 	}
-	time.Sleep(time.Millisecond * 200)
+
 	// read another coz previous would be ours
-	datad, err := conn.ReadUntil("\n")
+	datad, err := conn.ReadString('#')
+
 	if err != nil {
 		return
 	}
@@ -239,37 +244,9 @@ func chompAllValues(conn *telnet.Conn, command string) (values []int, err error)
 	return
 }
 
-func login(conn *telnet.Conn) (err error) {
-	time.Sleep(time.Second * 1)
-
-	err = conn.SkipUntil("login: ")
-	if err != nil {
-		return
-	}
-
-	conn.Write([]byte("root\n"))
-	time.Sleep(time.Millisecond * 200)
-
-	err = conn.SkipUntil("Password: ")
-	if err != nil {
-		return
-	}
-
-	conn.Write([]byte("froot\n"))
-	time.Sleep(time.Second * 1)
-
-	err = conn.SkipUntil("# ")
-	if err != nil {
-		return
-	}
-	time.Sleep(time.Millisecond * 200)
-
-	// END login
-	return
-}
-
 func getValues(a *AValues, i *IValues) (err error) {
 	conn, err := telnet.DialTimeout("tcp", address, time.Second*30)
+	conn.SetUnixWriteMode(true)
 	if err != nil {
 		return
 	}
@@ -283,11 +260,10 @@ func getValues(a *AValues, i *IValues) (err error) {
 	if err != nil {
 		return
 	}
-	iValues, err := chompAllValues(conn, "pcoget 0 I 1 64")
+	iValues, err :=  chompAllValues(conn, "pcoget 0 I 1 35")
 	if err != nil {
 		return
 	}
-
 	err = DecodeValues(aValues, a)
 	if err != nil {
 		return
@@ -302,6 +278,7 @@ func getValues(a *AValues, i *IValues) (err error) {
 func writeValues(a *AValues, i *IValues) (err error) {
 
 	conn, err := telnet.DialTimeout("tcp", address, time.Second*30)
+	conn.SetUnixWriteMode(true)
 	if err != nil {
 		return
 	}
@@ -318,50 +295,75 @@ func writeValues(a *AValues, i *IValues) (err error) {
 				return
 			}
 		}
-		time.Sleep(2)
+
 		return nil
 	}
 
 	// make this happen from the struct
 	tempCommand := fmt.Sprintf("pcoset 0 I %d %d\n", temperatureDataIndex, int(a.TemperatureTarget*temperatureMultiplier))
 	humCommand := fmt.Sprintf("pcoset 0 I %d %d\n", humidityDataIndex, int(i.RelativeHumidityTarget))
+	light1Command := fmt.Sprintf("pcoset 0 I %d %d\n", light1DataIndex, int(i.Light1Target))
+	light2Command := fmt.Sprintf("pcoset 0 I %d %d\n", light2DataIndex, int(i.Light2Target))
+
+	// set busy flag
+	if err = runSequence(setBusyFlagCommand); err != nil {
+		return
+	}
 
 	command_list := []string{}
 	// concat initCommand to command list
 	command_list = append(command_list, initCommand...)
-	// run tempCommand and humcommand
+	// add tempCommand and hum command
 	command_list = append(command_list, tempCommand, humCommand)
+
+	// run lights if enabled
+	if useLight1 {
+		command_list = append(command_list, light1Command)
+	}
+	if useLight2 {
+		command_list = append(command_list, light2Command)
+	}
 	// teardown
 	command_list = append(command_list, teardownCommand...)
-	if err = runSequence(command_list); err != nil {
-		return
-	}
-
-	command_list = []string{}
 	// clear write flag
 	command_list = append(command_list, clearWriteFlagCommand...)
-	if err = runSequence(command_list); err != nil {
-		return
-	}
-
-	command_list = []string{}
 	// reload
 	command_list = append(command_list, reloadSequence...)
-	// teardown again
+	// teardown
 	command_list = append(command_list, teardownCommand...)
-	if err = runSequence(command_list); err != nil {
-		return
-	}
-
-	command_list = []string{}
-	// clear write flag again
+	// clear Write
 	command_list = append(command_list, clearWriteFlagCommand...)
-	// finally clear busy flag
+	// clear busy
 	command_list = append(command_list, clearBusyFlagCommand...)
+	// run
 	if err = runSequence(command_list); err != nil {
 		return
 	}
 
+
+	return
+}
+
+func login(conn *telnet.Conn) (err error) {
+
+
+	err = conn.SkipUntil("login: ")
+	if err != nil {
+		return
+	}
+
+	conn.Write([]byte("root\n"))
+	err = conn.SkipUntil("Password: ")
+	if err != nil {
+		return
+	}
+
+	conn.Write([]byte("froot\n"))
+	err = conn.SkipUntil("# ")
+	if err != nil {
+		return
+	}
+	// END login
 	return
 }
 
@@ -451,10 +453,39 @@ func runStuff(theTime time.Time, lineSplit []string) bool {
 		errLog.Println("failed parsing temperature float")
 		return true
 	}
-
 	// RUN STUFF HERE
 	a := AValues{TemperatureTarget: temperature}
 	i := IValues{RelativeHumidityTarget: int(math.Round(humidity))}
+
+
+	if useLight1 {
+		foundLight := matchFloat.FindString(lineSplit[4])
+		if len(foundLight) < 0 {
+			errLog.Println("no light1 value found")
+			return true
+		}
+
+		light, err := strconv.ParseFloat(foundLight, 64)
+		if err != nil {
+			errLog.Println("failed parsing light1 float")
+			return true
+		}
+		i.Light1Target = int(light)
+	}
+	if useLight2 {
+		foundLight := matchFloat.FindString(lineSplit[5])
+		if len(foundLight) < 0 {
+			errLog.Println("no light2 value found")
+			return true
+		}
+
+		light, err := strconv.ParseFloat(foundLight, 64)
+		if err != nil {
+			errLog.Println("failed parsing light2 float")
+			return true
+		}
+		i.Light2Target = int(light)
+	}
 
 	err = getValues(&a, &i)
 	if err != nil {
@@ -462,8 +493,12 @@ func runStuff(theTime time.Time, lineSplit []string) bool {
 		time.Sleep(time.Second * 10)
 		return false
 	}
-	errLog.Printf("t %s \tt:\t%d\trh:%d \n", theTime, int(a.TemperatureTarget), int(i.RelativeHumidityTarget))
-	errLog.Printf("c %s \tt:\t%d\trh:%d \n", theTime, int(a.Temperature), int(i.RelativeHumidity))
+	errLog.Printf("%s \tt:\t%.2f|%.2f\trh:%d|%d \n",
+		theTime,
+		a.TemperatureTarget,
+		a.Temperature,
+		int(i.RelativeHumidityTarget),
+		int(i.RelativeHumidity))
 	i.Success = "SUCCESS"
 	if err = writeValues(&a, &i); err != nil {
 		errLog.Println(err)
@@ -631,6 +666,25 @@ func init() {
 			dummy = true
 		} else {
 			dummy = false
+		}
+	}
+
+
+	flag.BoolVar(&useLight1, "use-light1", false, "use chamber internal light 1")
+	if tempV := strings.ToLower(os.Getenv("USE_LIGHT1")); tempV != "" {
+		if tempV == "true" || tempV == "1" {
+			useLight1 = true
+		} else {
+			useLight1 = false
+		}
+	}
+
+	flag.BoolVar(&useLight2, "use-light2", false, "use chamber internal light 2")
+	if tempV := strings.ToLower(os.Getenv("USE_LIGHT2")); tempV != "" {
+		if tempV == "true" || tempV == "1" {
+			useLight2 = true
+		} else {
+			useLight2 = false
 		}
 	}
 
