@@ -33,6 +33,8 @@ var (
 	interval                                   time.Duration
 )
 
+const DEBUG = false
+
 const (
 	matchFloatExp = `[-+]?\d*\.\d+|\d+`
 	matchIntsExp  = `\b(\d+)\b`
@@ -59,23 +61,23 @@ var (
 	//
 	//// The init sequence is a sequence of strings passed to the set command which
 	//// "setup" the conviron PCOweb controller to receive the temperature, humidity, and light settings.
-	initCommand = []string{"pcoset 0 I 100 26\n", "pcoset 0 I 101 1\n", "pcoset 0 I 102 1\n"}
+	initCommand = "pcoset 0 I 100 26; pcoset 0 I 101 1; pcoset 0 I 102 1;"
 
 	//// The teardown sequence happens at the end of each set of messages
 
 	//// (not at the end of the connection)
-	teardownCommand = []string{"pcoset 0 I 121 1\n"}
+	teardownCommand = "pcoset 0 I 121 1;"
 
 	//// Command to clear the write flag, occurs after writing but before reloading.
-	clearWriteFlagCommand = []string{"pcoset 0 I 120 0\n"}
+	clearWriteFlagCommand = "pcoset 0 I 120 0;"
 
 	//// Sequence to force reloading of the schedule, to make the written changes go live
-	reloadSequence = []string{"pcoset 0 I 100 7\n", "pcoset 0 I 101 1\n", "pcoset 0 I 102 1\n"}
+	reloadSequence = "pcoset 0 I 100 7; pcoset 0 I 101 1; pcoset 0 I 102 1"
 	//
 	//// Command to clear the busy flag, occurs before exiting the connection
-	clearBusyFlagCommand = []string{"pcoset 0 I 123 0\n"}
+	clearBusyFlagCommand = "pcoset 0 I 123 0;"
 	//// Command to set the busy flag
-	setBusyFlagCommand = []string{"pcoset 0 I 123 1\n"}
+	setBusyFlagCommand = "pcoset 0 I 123 1;"
 )
 
 // conviron indices start at 1
@@ -276,6 +278,10 @@ func getValues(a *AValues, i *IValues) (err error) {
 }
 
 func writeValues(a *AValues, i *IValues) (err error) {
+	start := time.Now()
+	defer func() {
+		errLog.Println("time for last writeValues: ", time.Since(start))
+	}()
 
 	conn, err := telnet.DialTimeout("tcp", address, time.Second*30)
 	conn.SetUnixWriteMode(true)
@@ -288,58 +294,65 @@ func writeValues(a *AValues, i *IValues) (err error) {
 		return
 	}
 
-	var runSequence = func(seq []string) (err error) {
-		for _, cmd := range seq {
-			_, err = chompAllValues(conn, cmd)
-			if err != nil {
-				return
-			}
-		}
-
-		return nil
-	}
 
 	// make this happen from the struct
-	tempCommand := fmt.Sprintf("pcoset 0 I %d %d\n", temperatureDataIndex, int(a.TemperatureTarget*temperatureMultiplier))
-	humCommand := fmt.Sprintf("pcoset 0 I %d %d\n", humidityDataIndex, int(i.RelativeHumidityTarget))
-	light1Command := fmt.Sprintf("pcoset 0 I %d %d\n", light1DataIndex, int(i.Light1Target))
-	light2Command := fmt.Sprintf("pcoset 0 I %d %d\n", light2DataIndex, int(i.Light2Target))
+	tempCommand := fmt.Sprintf("pcoset 0 I %d %d; ", temperatureDataIndex, int(a.TemperatureTarget*temperatureMultiplier))
+	humCommand := fmt.Sprintf("pcoset 0 I %d %d; ", humidityDataIndex, int(i.RelativeHumidityTarget))
+	light1Command := fmt.Sprintf("pcoset 0 I %d %d; ", light1DataIndex, int(i.Light1Target))
+	light2Command := fmt.Sprintf("pcoset 0 I %d %d; ", light2DataIndex, int(i.Light2Target))
+
 
 	// set busy flag
-	if err = runSequence(setBusyFlagCommand); err != nil {
+
+	if _, err = chompAllValues(conn, setBusyFlagCommand); err != nil {
+		return
+	}
+	time.Sleep(time.Millisecond*500)
+	if _, err = chompAllValues(conn, initCommand); err != nil {
 		return
 	}
 
-	command_list := []string{}
-	// concat initCommand to command list
-	command_list = append(command_list, initCommand...)
-	// add tempCommand and hum command
-	command_list = append(command_list, tempCommand, humCommand)
+	if _, err = chompAllValues(conn, tempCommand); err != nil {
+		return
+	}
 
-	// run lights if enabled
+	if _, err = chompAllValues(conn, humCommand); err != nil {
+		return
+	}
+
 	if useLight1 {
-		command_list = append(command_list, light1Command)
+		if _, err = chompAllValues(conn, light1Command); err != nil {
+			return
+		}
 	}
 	if useLight2 {
-		command_list = append(command_list, light2Command)
-	}
-	// teardown
-	command_list = append(command_list, teardownCommand...)
-	// clear write flag
-	command_list = append(command_list, clearWriteFlagCommand...)
-	// reload
-	command_list = append(command_list, reloadSequence...)
-	// teardown
-	command_list = append(command_list, teardownCommand...)
-	// clear Write
-	command_list = append(command_list, clearWriteFlagCommand...)
-	// clear busy
-	command_list = append(command_list, clearBusyFlagCommand...)
-	// run
-	if err = runSequence(command_list); err != nil {
-		return
+		if _, err = chompAllValues(conn, light2Command); err != nil {
+			return
+		}
 	}
 
+	if _, err = chompAllValues(conn, teardownCommand); err != nil {
+		return
+	}
+	time.Sleep(time.Millisecond*500)
+	if _, err = chompAllValues(conn, clearWriteFlagCommand); err != nil {
+		return
+	}
+	time.Sleep(time.Millisecond*500)
+	if _, err = chompAllValues(conn, reloadSequence); err != nil {
+		return
+	}
+	if _, err = chompAllValues(conn, teardownCommand); err != nil {
+		return
+	}
+	time.Sleep(time.Millisecond*500)
+	if _, err = chompAllValues(conn, clearWriteFlagCommand); err != nil {
+		return
+	}
+	time.Sleep(time.Millisecond*500)
+	if _, err = chompAllValues(conn, clearBusyFlagCommand); err != nil {
+		return
+	}
 
 	return
 }
@@ -420,6 +433,7 @@ func runConditions() {
 			if runStuff(theTime, lineSplit) {
 				break
 			}
+			time.Sleep(time.Second*5)
 		}
 		// end RUN STUFF
 		idx++
@@ -453,8 +467,10 @@ func runStuff(theTime time.Time, lineSplit []string) bool {
 		errLog.Println("failed parsing temperature float")
 		return true
 	}
-	// RUN STUFF HERE
-	a := AValues{TemperatureTarget: temperature}
+
+	// round temperature to 1 decimal place
+	a := AValues{TemperatureTarget: math.Round(temperature*10)/10}
+	// round humidity to nearest integer
 	i := IValues{RelativeHumidityTarget: int(math.Round(humidity))}
 
 
@@ -493,11 +509,13 @@ func runStuff(theTime time.Time, lineSplit []string) bool {
 		time.Sleep(time.Second * 10)
 		return false
 	}
-	errLog.Printf("%s \tt:\t%.2f|%.2f\trh:%d|%d \n",
+	errLog.Printf("%s (tgt|setp|act) t:(%.1f|%.1f|%.1f) rh:(%02d|%02d|%02d)",
 		theTime,
 		a.TemperatureTarget,
+		a.TemperatureSetPoint,
 		a.Temperature,
 		int(i.RelativeHumidityTarget),
+		int(i.RelativeHumiditySetPoint),
 		int(i.RelativeHumidity))
 	i.Success = "SUCCESS"
 	if err = writeValues(&a, &i); err != nil {
@@ -642,7 +660,7 @@ func init() {
 		}
 	}
 
-	errLog = log.New(os.Stderr, "[conviron] ", log.Ldate|log.Ltime|log.Lshortfile)
+	errLog = log.New(os.Stderr, "[conviron] ", log.Ldate|log.Ltime)
 	// get the local zone and offset
 	zoneName, zoneOffset = time.Now().Zone()
 
