@@ -26,11 +26,11 @@ var (
 )
 
 var (
-	noMetrics, dummy                           bool
-	useLight1,useLight2                        bool
-	address                                    string
-	conditionsPath, hostTag, groupTag, userTag string
-	interval                                   time.Duration
+	noMetrics, dummy                          bool
+	useLight1,useLight2                       bool
+	address                                   string
+	conditionsPath, hostTag, groupTag, didTag string
+	interval                                  time.Duration
 )
 
 const DEBUG = false
@@ -631,8 +631,8 @@ func writeMetrics(av AValues, iv IValues) {
 		if groupTag != "" {
 			m.AddTag("group", groupTag)
 		}
-		if userTag != "" {
-			m.AddTag("user", userTag)
+		if didTag != "" {
+			m.AddTag("did", didTag)
 		}
 
 		telegrafClient.Write(m)
@@ -758,9 +758,9 @@ func init() {
 		groupTag = tempV
 	}
 
-	flag.StringVar(&userTag, "user-tag", "", "user specified tag")
-	if tempV := os.Getenv("USER_TAG"); tempV != "" {
-		userTag = tempV
+	flag.StringVar(&didTag, "did-tag", "", "did specified tag")
+	if tempV := os.Getenv("DID_TAG"); tempV != "" {
+		didTag = tempV
 	}
 
 	flag.StringVar(&conditionsPath, "conditions", "", "conditions file to")
