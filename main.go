@@ -120,6 +120,15 @@ type IValues struct {
 	//IPAddressOctet4						int `idx:"50"`
 }
 
+type EnvironmentalStats struct {
+	VapourPressureDeficit float64
+	SaturatedVapourPressure float64
+	ActualVapourPressure float64
+	//MixingRatio float64
+	//SaturatedMixingRatio float64
+	AbsoluteHumidity float64 //(in kg/m³)
+}
+
 // DecodeValues decodes values in the array `values` and sets the values in the struct based on the `idx` tag,
 // it also divides the values by the multiplier tag (which should be of the same type as the value).
 func DecodeValues(values []int, i interface{}) error {
@@ -278,6 +287,23 @@ func getValues(a *AValues, i *IValues) (err error) {
 	return
 }
 
+func getEnvironmentalStats(temperature64, humidity64 float64, values *EnvironmentalStats){
+	// saturated vapor pressure
+	values.SaturatedVapourPressure = 0.6108 * math.Exp(17.27 * temperature64 / (temperature64 + 237.3))
+	// actual vapor pressure
+	values.ActualVapourPressure = humidity64 / 100 * values.SaturatedVapourPressure
+	// mixing ratio
+	// values.SaturatedMixingRatio = 621.97 * ea / ((pressure64/10) - ea)
+	// saturated mixing ratio
+	//values.SaturatedMixingRatio = 621.97 * es / ((pressure64/10) - es)
+	// absolute humidity (in kg/m³)
+	values.AbsoluteHumidity = (values.ActualVapourPressure / (461.5 * (temperature64 + 273.15)))*1000
+
+	// this equation returns a negative value (in kPa), which while technically correct,
+	// is invalid in this case because we are talking about a deficit.
+	values.VapourPressureDeficit = (values.ActualVapourPressure - values.SaturatedVapourPressure) * -1
+}
+
 func writeValues(a *AValues, i *IValues) (err error) {
 	start := time.Now()
 	defer func() {
@@ -368,8 +394,6 @@ func writeValues(a *AValues, i *IValues) (err error) {
 }
 
 func login(conn *telnet.Conn) (err error) {
-
-
 	err = conn.SkipUntil("login: ")
 	if err != nil {
 		return
@@ -593,6 +617,14 @@ func writeMetrics(av AValues, iv IValues) {
 		for i := 0; i < vi.NumField(); i++ {
 			decodeStructToMeasurement(&m, vi, i)
 		}
+
+		ev := EnvironmentalStats{}
+		getEnvironmentalStats(av.Temperature, float64(iv.RelativeHumidity), &ev)
+		ve := reflect.ValueOf(&ev).Elem()
+		for i := 0; i < ve.NumField(); i++ {
+			decodeStructToMeasurement(&m, ve, i)
+		}
+
 		if hostTag != "" {
 			m.AddTag("host", hostTag)
 		}
@@ -762,17 +794,23 @@ func main() {
 
 	if interval == time.Second*0 {
 		a := AValues{TemperatureTarget: nullTargetFloat}
-		i := IValues{RelativeHumidityTarget: nullTargetInt}
+		i := IValues{RelativeHumidityTarget: nullTargetInt, Light1Target: nullTargetInt, Light2Target:nullTargetInt}
 		err := getValues(&a, &i)
 		if err != nil {
 			errLog.Println(err)
 			os.Exit(1)
 		}
+
+		ev := EnvironmentalStats{}
+		getEnvironmentalStats(a.Temperature, float64(i.RelativeHumidity), &ev)
+
 		// print the line
 		stra := toInfluxLineProtocol("conviron2", &a, time.Now().UnixNano())
 		fmt.Fprintln(os.Stdout, stra)
 		stri := toInfluxLineProtocol("conviron2", &i, time.Now().UnixNano())
 		fmt.Fprintln(os.Stdout, stri)
+		stre := toInfluxLineProtocol("conviron2", &ev, time.Now().UnixNano())
+		fmt.Fprintln(os.Stdout, stre)
 		os.Exit(0)
 	}
 
@@ -790,6 +828,10 @@ func main() {
 			fmt.Fprintln(os.Stdout, stra)
 			stri := toInfluxLineProtocol("conviron2", &i, time.Now().UnixNano())
 			fmt.Fprintln(os.Stdout, stri)
+			ev := EnvironmentalStats{}
+			getEnvironmentalStats(a.Temperature, float64(i.RelativeHumidity), &ev)
+			stre := toInfluxLineProtocol("conviron2", &ev, time.Now().UnixNano())
+			fmt.Fprintln(os.Stdout, stre)
 			writeMetrics(a, i)
 		}
 
