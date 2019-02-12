@@ -334,22 +334,21 @@ func writeValues(a *AValues, i *IValues) (err error) {
 	if _, err = chompAllValues(conn, teardownCommand); err != nil {
 		return
 	}
-	time.Sleep(time.Millisecond*500)
+	time.Sleep(time.Second*2)
 	if _, err = chompAllValues(conn, clearWriteFlagCommand); err != nil {
 		return
 	}
-	time.Sleep(time.Millisecond*500)
 	if _, err = chompAllValues(conn, reloadSequence); err != nil {
 		return
 	}
 	if _, err = chompAllValues(conn, teardownCommand); err != nil {
 		return
 	}
-	time.Sleep(time.Millisecond*500)
+	time.Sleep(time.Second*2)
 	if _, err = chompAllValues(conn, clearWriteFlagCommand); err != nil {
 		return
 	}
-	time.Sleep(time.Millisecond*500)
+
 	if _, err = chompAllValues(conn, clearBusyFlagCommand); err != nil {
 		return
 	}
