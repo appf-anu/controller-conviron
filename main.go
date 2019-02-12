@@ -300,10 +300,10 @@ func writeValues(a *AValues, i *IValues) (err error) {
 		if t[0] == 0 && t[1] == 0 {
 			// if they are both 0 then bingo, its midnight and the controller is busy reloading the program.
 			errLog.Println("midnight in chamber, skipping...")
-			return
+			return nil
 		}
 	}else {
-		return
+		return nil
 	}
 
 	// make this happen from the struct
