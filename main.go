@@ -78,6 +78,7 @@ var (
 	clearBusyFlagCommand = "pcoset 0 I 123 0;"
 	//// Command to set the busy flag
 	setBusyFlagCommand = "pcoset 0 I 123 1;"
+	getChamberTimeCommand = "pcoget 0 I 44 2;"
 )
 
 // conviron indices start at 1
@@ -294,6 +295,16 @@ func writeValues(a *AValues, i *IValues) (err error) {
 		return
 	}
 
+	// if this results in no error, then we got the time in the chamber
+	if t,err := chompAllValues(conn, getChamberTimeCommand); err == nil{
+		if t[0] == 0 && t[1] == 0 {
+			// if they are both 0 then bingo, its midnight and the controller is busy reloading the program.
+			errLog.Println("midnight in chamber, skipping...")
+			return
+		}
+	}else {
+		return
+	}
 
 	// make this happen from the struct
 	tempCommand := fmt.Sprintf("pcoset 0 I %d %d; ", temperatureDataIndex, int(a.TemperatureTarget*temperatureMultiplier))
@@ -307,7 +318,7 @@ func writeValues(a *AValues, i *IValues) (err error) {
 	if _, err = chompAllValues(conn, setBusyFlagCommand); err != nil {
 		return
 	}
-	time.Sleep(time.Millisecond*500)
+	time.Sleep(time.Millisecond*100)
 	if _, err = chompAllValues(conn, initCommand); err != nil {
 		return
 	}
