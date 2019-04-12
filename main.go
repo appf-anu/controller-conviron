@@ -1,10 +1,9 @@
 package main
 
 import (
-	"bufio"
 	"flag"
 	"fmt"
-	"github.com/bcampbell/fuzzytime"
+	"github.com/appf-anu/chamber-tools"
 	"github.com/mdaffin/go-telegraf"
 	"github.com/ziutek/telnet"
 	"log"
@@ -16,18 +15,18 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"encoding/xml"
+	"net/http"
+	"io/ioutil"
 )
 
 var (
-	errLog     *log.Logger
-	ctx        fuzzytime.Context
-	zoneName   string
-	zoneOffset int
+	errLog *log.Logger
 )
 
 var (
-	noMetrics, dummy                          bool
-	useLight1,useLight2                       bool
+	noMetrics, dummy, loopFirstDay            bool
+	useLight1, useLight2, usehttp             bool
 	address                                   string
 	conditionsPath, hostTag, groupTag, didTag string
 	interval                                  time.Duration
@@ -43,6 +42,29 @@ const (
 // TsRegex is a regexp to find a timestamp within a filename
 var /* const */ matchFloat = regexp.MustCompile(matchFloatExp)
 var /* const */ matchInts = regexp.MustCompile(matchIntsExp)
+
+
+const httpAuthString = "YWRtaW46ZmFkbWlu"
+
+type PCOWeb struct {
+	PCO PCO
+}
+
+type PCO struct {
+	Analog []AnalogVar `xml:"ANALOG>VARIABLE"`
+	Integer []IntegerVar `xml:"INTEGER>VARIABLE"`
+}
+
+type AnalogVar struct{
+	//Index int `xml:"INDEX"`
+	Value float64 `xml:"VALUE"`
+}
+
+
+type IntegerVar struct{
+	//Index int `xml:"INDEX"`
+	Value int `xml:"VALUE"`
+}
 
 var (
 	// this is used because the convirons do not have an understanding of floating point numbers,
@@ -77,8 +99,9 @@ var (
 	//// Command to clear the busy flag, occurs before exiting the connection
 	clearBusyFlagCommand = "pcoset 0 I 123 0;"
 	//// Command to set the busy flag
-	setBusyFlagCommand = "pcoset 0 I 123 1;"
-	getChamberTimeCommand = "pcoget 0 I 44 2;"
+	setBusyFlagCommand             = "pcoset 0 I 123 1;"
+	getChamberTimeCommand          = "pcoget 0 I 149 2;"
+	secondaryGetChamberTimeCommand = "pcoget 0 I 45 2;"
 )
 
 // conviron indices start at 1
@@ -111,9 +134,9 @@ type IValues struct {
 	Light1SetPoint                      int `idx:"12"`
 	Light1Target                        int
 	//Light1SetPoint                      int `idx:"12"`
-	Light2Target                        int
-	HiPressure                          int `idx:"33"`
-	LoPressure                          int `idx:"34"`
+	Light2Target int
+	HiPressure   int `idx:"33"`
+	LoPressure   int `idx:"34"`
 	//IPAddressOctet1						int `idx:"47"`
 	//IPAddressOctet2						int `idx:"48"`
 	//IPAddressOctet3						int `idx:"49"`
@@ -121,17 +144,19 @@ type IValues struct {
 }
 
 type EnvironmentalStats struct {
-	VapourPressureDeficit float64
+	VapourPressureDeficit   float64
 	SaturatedVapourPressure float64
-	ActualVapourPressure float64
+	ActualVapourPressure    float64
 	//MixingRatio float64
 	//SaturatedMixingRatio float64
 	AbsoluteHumidity float64 //(in kg/m³)
 }
 
+
 // DecodeValues decodes values in the array `values` and sets the values in the struct based on the `idx` tag,
 // it also divides the values by the multiplier tag (which should be of the same type as the value).
 func DecodeValues(values []int, i interface{}) error {
+
 	v := reflect.ValueOf(i)
 
 	if v.Kind() != reflect.Ptr || v.IsNil() {
@@ -163,6 +188,7 @@ func DecodeValues(values []int, i interface{}) error {
 							value /= mult
 						}
 					}
+
 					fv.SetInt(value)
 				case reflect.Float64, reflect.Float32:
 					floatVal := float64(values[idx])
@@ -171,6 +197,7 @@ func DecodeValues(values []int, i interface{}) error {
 							floatVal /= mult
 						}
 					}
+
 					fv.SetFloat(floatVal)
 				case reflect.Bool:
 					fv.SetBool(values[idx] != 0)
@@ -182,6 +209,7 @@ func DecodeValues(values []int, i interface{}) error {
 	}
 	return nil
 }
+
 
 var usage = func() {
 	use := `
@@ -209,21 +237,6 @@ quirks:
 
 `
 	fmt.Printf(use, os.Args[0], os.Args[0], os.Args[0])
-}
-
-func parseDateTime(tString string) (time.Time, error) {
-
-	datetimeValue, _, err := ctx.Extract(tString)
-	if err != nil {
-		errLog.Printf("couldn't extract datetime: %s", err)
-	}
-
-	datetimeValue.Time.SetHour(datetimeValue.Time.Hour())
-	datetimeValue.Time.SetMinute(datetimeValue.Time.Minute())
-	datetimeValue.Time.SetSecond(datetimeValue.Time.Second())
-	datetimeValue.Time.SetTZOffset(zoneOffset)
-
-	return time.Parse("2006-01-02T15:04:05Z07:00", datetimeValue.ISOFormat())
 }
 
 func chompAllValues(conn *telnet.Conn, command string) (values []int, err error) {
@@ -256,12 +269,57 @@ func chompAllValues(conn *telnet.Conn, command string) (values []int, err error)
 	return
 }
 
-func getValues(a *AValues, i *IValues) (err error) {
-	conn, err := telnet.DialTimeout("tcp", address, time.Second*30)
-	conn.SetUnixWriteMode(true)
+func getValuesHttp(a *AValues, i *IValues) (err error) {
+
+	redirectPolicyFunc := func(req *http.Request, via []*http.Request) error{
+		req.SetBasicAuth("admin", "fadmin")
+		return nil
+	}
+	client := &http.Client{
+		CheckRedirect: redirectPolicyFunc,
+	}
+	req,_ := http.NewRequest("GET", "http://"+address+"/config/xml.cgi?I|1|35|A|1|3", nil)
+	req.SetBasicAuth("admin", "fadmin")
+	resp, err := client.Do(req)
+	if err != nil{
+		return
+	}
+	defer resp.Body.Close()
+	container := PCOWeb{}
+	if resp.StatusCode != http.StatusOK {
+		errLog.Println("status code ", resp.StatusCode)
+	}
+	bodyBytes, err := ioutil.ReadAll(resp.Body)
+	err = xml.Unmarshal(bodyBytes, &container)
+	if err != nil{
+		return
+	}
+	var aValues []int
+	for _,x := range container.PCO.Analog {
+		aValues = append(aValues,int(x.Value*10.0)) // analog values are all multiply by 10
+	}
+	var iValues []int
+	for _,x := range container.PCO.Integer {
+		iValues = append(iValues,int(x.Value))
+	}
+	err = DecodeValues(aValues, a)
 	if err != nil {
 		return
 	}
+	err = DecodeValues(iValues, i)
+	if err != nil {
+		return
+	}
+	return
+}
+
+func getValues(a *AValues, i *IValues) (err error) {
+	errLog.Println("Attempting telnet connection ...")
+	conn, err := telnet.DialTimeout("tcp", address, time.Second*30)
+	if err != nil {
+		return
+	}
+	conn.SetUnixWriteMode(true)
 	defer conn.Close()
 	err = login(conn)
 	if err != nil {
@@ -272,7 +330,7 @@ func getValues(a *AValues, i *IValues) (err error) {
 	if err != nil {
 		return
 	}
-	iValues, err :=  chompAllValues(conn, "pcoget 0 I 1 35")
+	iValues, err := chompAllValues(conn, "pcoget 0 I 1 35")
 	if err != nil {
 		return
 	}
@@ -287,9 +345,9 @@ func getValues(a *AValues, i *IValues) (err error) {
 	return
 }
 
-func getEnvironmentalStats(temperature64, humidity64 float64, values *EnvironmentalStats){
+func getEnvironmentalStats(temperature64, humidity64 float64, values *EnvironmentalStats) {
 	// saturated vapor pressure
-	values.SaturatedVapourPressure = 0.6108 * math.Exp(17.27 * temperature64 / (temperature64 + 237.3))
+	values.SaturatedVapourPressure = 0.6108 * math.Exp(17.27*temperature64/(temperature64+237.3))
 	// actual vapor pressure
 	values.ActualVapourPressure = humidity64 / 100 * values.SaturatedVapourPressure
 	// mixing ratio
@@ -297,7 +355,7 @@ func getEnvironmentalStats(temperature64, humidity64 float64, values *Environmen
 	// saturated mixing ratio
 	//values.SaturatedMixingRatio = 621.97 * es / ((pressure64/10) - es)
 	// absolute humidity (in kg/m³)
-	values.AbsoluteHumidity = (values.ActualVapourPressure / (461.5 * (temperature64 + 273.15)))*1000
+	values.AbsoluteHumidity = (values.ActualVapourPressure / (461.5 * (temperature64 + 273.15))) * 1000
 
 	// this equation returns a negative value (in kPa), which while technically correct,
 	// is invalid in this case because we are talking about a deficit.
@@ -311,10 +369,10 @@ func writeValues(a *AValues, i *IValues) (err error) {
 	}()
 
 	conn, err := telnet.DialTimeout("tcp", address, time.Second*30)
-	conn.SetUnixWriteMode(true)
 	if err != nil {
 		return
 	}
+	conn.SetUnixWriteMode(true)
 	defer conn.Close()
 	err = login(conn)
 	if err != nil {
@@ -322,13 +380,19 @@ func writeValues(a *AValues, i *IValues) (err error) {
 	}
 
 	// if this results in no error, then we got the time in the chamber
-	if t,err := chompAllValues(conn, getChamberTimeCommand); err == nil{
-		if t[0] == 0 && t[1] == 0 {
+	if t, err := chompAllValues(conn, getChamberTimeCommand); err == nil {
+		if len(t) == 2 && t[0] == 0 && t[1] == 0 {
 			// if they are both 0 then bingo, its midnight and the controller is busy reloading the program.
 			errLog.Println("midnight in chamber, skipping...")
 			return nil
+		} else {
+			if t2, err := chompAllValues(conn, secondaryGetChamberTimeCommand); err == nil {
+				if len(t2) == 2 && t2[0] == 0 && t2[1] == 0 {
+					return nil
+				}
+			}
 		}
-	}else {
+	} else {
 		return nil
 	}
 
@@ -338,13 +402,12 @@ func writeValues(a *AValues, i *IValues) (err error) {
 	light1Command := fmt.Sprintf("pcoset 0 I %d %d; ", light1DataIndex, int(i.Light1Target))
 	light2Command := fmt.Sprintf("pcoset 0 I %d %d; ", light2DataIndex, int(i.Light2Target))
 
-
 	// set busy flag
 
 	if _, err = chompAllValues(conn, setBusyFlagCommand); err != nil {
 		return
 	}
-	time.Sleep(time.Millisecond*100)
+	time.Sleep(time.Millisecond * 100)
 	if _, err = chompAllValues(conn, initCommand); err != nil {
 		return
 	}
@@ -371,7 +434,7 @@ func writeValues(a *AValues, i *IValues) (err error) {
 	if _, err = chompAllValues(conn, teardownCommand); err != nil {
 		return
 	}
-	time.Sleep(time.Second*2)
+	time.Sleep(time.Second * 2)
 	if _, err = chompAllValues(conn, clearWriteFlagCommand); err != nil {
 		return
 	}
@@ -381,7 +444,7 @@ func writeValues(a *AValues, i *IValues) (err error) {
 	if _, err = chompAllValues(conn, teardownCommand); err != nil {
 		return
 	}
-	time.Sleep(time.Second*2)
+	time.Sleep(time.Second * 2)
 	if _, err = chompAllValues(conn, clearWriteFlagCommand); err != nil {
 		return
 	}
@@ -414,66 +477,6 @@ func login(conn *telnet.Conn) (err error) {
 	return
 }
 
-func runConditions() {
-	errLog.Printf("running conditions file: %s\n", conditionsPath)
-	file, err := os.Open(conditionsPath)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer file.Close()
-	scanner := bufio.NewScanner(file)
-	idx := 0
-	var lastTime time.Time
-	var lastLineSplit []string
-	firstRun := true
-	for scanner.Scan() {
-		line := scanner.Text()
-		if idx == 0 {
-			idx++
-			continue
-		}
-
-		lineSplit := strings.Split(line, ",")
-		timeStr := lineSplit[0]
-		theTime, err := parseDateTime(timeStr)
-		if err != nil {
-			errLog.Println(err)
-			continue
-		}
-
-		// if we are before the time skip until we are after it
-		// the -10s means that we shouldnt run again.
-		if theTime.Before(time.Now()) {
-			lastLineSplit = lineSplit
-			lastTime = theTime
-			continue
-		}
-
-		if firstRun {
-			firstRun = false
-			errLog.Println("running firstrun line")
-			for i := 0; i < 10; i++ {
-				if runStuff(lastTime, lastLineSplit) {
-					break
-				}
-			}
-		}
-
-		errLog.Printf("sleeping for %ds\n", int(time.Until(theTime).Seconds()))
-		time.Sleep(time.Until(theTime))
-
-		// RUN STUFF HERE
-		for i := 0; i < 10; i++ {
-			if runStuff(theTime, lineSplit) {
-				break
-			}
-			time.Sleep(time.Second*5)
-		}
-		// end RUN STUFF
-		idx++
-	}
-}
-
 // runStuff, should send values and write metrics.
 // returns true if program should continue, false if program should retry
 func runStuff(theTime time.Time, lineSplit []string) bool {
@@ -503,10 +506,9 @@ func runStuff(theTime time.Time, lineSplit []string) bool {
 	}
 
 	// round temperature to 1 decimal place
-	a := AValues{TemperatureTarget: math.Round(temperature*10)/10}
+	a := AValues{TemperatureTarget: math.Round(temperature*10) / 10}
 	// round humidity to nearest integer
 	i := IValues{RelativeHumidityTarget: int(math.Round(humidity))}
-
 
 	if useLight1 {
 		foundLight := matchFloat.FindString(lineSplit[4])
@@ -704,12 +706,6 @@ func init() {
 
 	errLog = log.New(os.Stderr, "[conviron] ", log.Ldate|log.Ltime)
 	// get the local zone and offset
-	zoneName, zoneOffset = time.Now().Zone()
-
-	ctx = fuzzytime.Context{
-		DateResolver: fuzzytime.DMYResolver,
-		TZResolver:   fuzzytime.DefaultTZResolver(zoneName),
-	}
 	flag.Usage = usage
 	flag.BoolVar(&noMetrics, "no-metrics", false, "dont collect metrics")
 	if tempV := strings.ToLower(os.Getenv("NO_METRICS")); tempV != "" {
@@ -729,6 +725,14 @@ func init() {
 		}
 	}
 
+	flag.BoolVar(&usehttp, "use-http", false, "use http to get metrics instead of telnet")
+	if tempV := strings.ToLower(os.Getenv("USE_HTTP")); tempV != "" {
+		if tempV == "true" || tempV == "1" {
+			usehttp = true
+		} else {
+			usehttp = false
+		}
+	}
 
 	flag.BoolVar(&useLight1, "use-light1", false, "use chamber internal light 1")
 	if tempV := strings.ToLower(os.Getenv("USE_LIGHT1")); tempV != "" {
@@ -745,6 +749,15 @@ func init() {
 			useLight2 = true
 		} else {
 			useLight2 = false
+		}
+	}
+
+	flag.BoolVar(&loopFirstDay, "loop", false, "loop over the first day")
+	if tempV := strings.ToLower(os.Getenv("LOOP")); tempV != "" {
+		if tempV == "true" || tempV == "1" {
+			loopFirstDay = true
+		} else {
+			loopFirstDay = false
 		}
 	}
 
@@ -782,7 +795,7 @@ func init() {
 		os.Exit(1)
 	}
 
-	errLog.Printf("timezone: \t%s\n", zoneName)
+	errLog.Printf("timezone: \t%s\n", chamber_tools.ZoneName)
 	errLog.Printf("hostTag: \t%s\n", hostTag)
 	errLog.Printf("groupTag: \t%s\n", groupTag)
 	errLog.Printf("address: \t%s\n", address)
@@ -794,8 +807,13 @@ func main() {
 
 	if interval == time.Second*0 {
 		a := AValues{TemperatureTarget: nullTargetFloat}
-		i := IValues{RelativeHumidityTarget: nullTargetInt, Light1Target: nullTargetInt, Light2Target:nullTargetInt}
-		err := getValues(&a, &i)
+		i := IValues{RelativeHumidityTarget: nullTargetInt, Light1Target: nullTargetInt, Light2Target: nullTargetInt}
+		var err error
+		if usehttp {
+			err = getValuesHttp(&a, &i)
+		} else {
+			err = getValues(&a, &i)
+		}
 		if err != nil {
 			errLog.Println(err)
 			os.Exit(1)
@@ -819,7 +837,13 @@ func main() {
 		a := AValues{TemperatureTarget: nullTargetFloat}
 		i := IValues{RelativeHumidityTarget: nullTargetInt}
 
-		err := getValues(&a, &i)
+		var err error
+		if usehttp {
+			err = getValuesHttp(&a, &i)
+		} else {
+			err = getValues(&a, &i)
+		}
+
 		if err != nil {
 			errLog.Println(err)
 		} else {
@@ -841,7 +865,12 @@ func main() {
 				a := AValues{TemperatureTarget: nullTargetFloat}
 				i := IValues{RelativeHumidityTarget: nullTargetInt}
 
-				err := getValues(&a, &i)
+				var err error
+				if usehttp {
+					err = getValuesHttp(&a, &i)
+				} else {
+					err = getValues(&a, &i)
+				}
 				if err != nil {
 					errLog.Println(err)
 					continue
@@ -859,7 +888,7 @@ func main() {
 	}
 
 	if conditionsPath != "" && !dummy {
-		runConditions()
+		chamber_tools.RunConditions(errLog, runStuff, conditionsPath, loopFirstDay)
 	}
 
 }
