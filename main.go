@@ -351,9 +351,9 @@ func getEnvironmentalStats(temperature64, humidity64 float64, values *Environmen
 	// actual vapor pressure
 	values.ActualVapourPressure = humidity64 / 100 * values.SaturatedVapourPressure
 	// mixing ratio
-	// values.SaturatedMixingRatio = 621.97 * ea / ((pressure64/10) - ea)
+	// values.mixingRatio = 621.97 * values.ActualVapourPressure / ((pressure64/10) - values.ActualVapourPressure)
 	// saturated mixing ratio
-	//values.SaturatedMixingRatio = 621.97 * es / ((pressure64/10) - es)
+	//values.SaturatedMixingRatio = 621.97 * values.SaturatedVapourPressure / ((pressure64/10) - values.SaturatedVapourPressure)
 	// absolute humidity (in kg/m³)
 	values.AbsoluteHumidity = (values.ActualVapourPressure / (461.5 * (temperature64 + 273.15))) * 1000
 
@@ -481,7 +481,7 @@ func login(conn *telnet.Conn) (err error) {
 // returns true if program should continue, false if program should retry
 func runStuff(theTime time.Time, lineSplit []string) bool {
 
-	foundHum := matchFloat.FindString(lineSplit[3])
+	foundHum := matchFloat.FindString(lineSplit[chamber_tools.IndexConfig.HumidityIdx])
 	if len(foundHum) < 0 {
 		errLog.Println("no humidity value found")
 		return true
@@ -493,7 +493,7 @@ func runStuff(theTime time.Time, lineSplit []string) bool {
 		return true
 	}
 
-	foundTemp := matchFloat.FindString(lineSplit[2])
+	foundTemp := matchFloat.FindString(lineSplit[chamber_tools.IndexConfig.TemperatureIdx])
 	if len(foundTemp) < 0 {
 		errLog.Println("no temperature value found")
 		return true
@@ -510,8 +510,8 @@ func runStuff(theTime time.Time, lineSplit []string) bool {
 	// round humidity to nearest integer
 	i := IValues{RelativeHumidityTarget: int(math.Round(humidity))}
 
-	if useLight1 {
-		foundLight := matchFloat.FindString(lineSplit[4])
+	if useLight1 && len(chamber_tools.IndexConfig.ChannelsIdx) > 0{
+		foundLight := matchFloat.FindString(lineSplit[chamber_tools.IndexConfig.ChannelsIdx[0]])
 		if len(foundLight) < 0 {
 			errLog.Println("no light1 value found")
 			return true
@@ -524,8 +524,8 @@ func runStuff(theTime time.Time, lineSplit []string) bool {
 		}
 		i.Light1Target = int(light)
 	}
-	if useLight2 {
-		foundLight := matchFloat.FindString(lineSplit[5])
+	if useLight2 && len(chamber_tools.IndexConfig.ChannelsIdx) > 1{
+		foundLight := matchFloat.FindString(lineSplit[chamber_tools.IndexConfig.ChannelsIdx[1]])
 		if len(foundLight) < 0 {
 			errLog.Println("no light2 value found")
 			return true
@@ -704,7 +704,8 @@ func init() {
 		}
 	}
 
-	errLog = log.New(os.Stderr, "[conviron] ", log.Ldate|log.Ltime)
+	errLog = log.New(os.Stderr, "[conviron] ", log.Ldate|log.Ltime|log.Lshortfile)
+
 	// get the local zone and offset
 	flag.Usage = usage
 	flag.BoolVar(&noMetrics, "no-metrics", false, "dont collect metrics")
@@ -794,6 +795,12 @@ func init() {
 		errLog.Println("dummy and no-metrics specified, nothing to do.")
 		os.Exit(1)
 	}
+	if conditionsPath != "" && !dummy {
+		chamber_tools.InitIndexConfig(errLog, conditionsPath)
+		if chamber_tools.IndexConfig.TemperatureIdx == -1 || chamber_tools.IndexConfig.HumidityIdx == -1 {
+			errLog.Println("No temperature or humidity headers found in conditions file" )
+		}
+	}
 
 	errLog.Printf("timezone: \t%s\n", chamber_tools.ZoneName)
 	errLog.Printf("hostTag: \t%s\n", hostTag)
@@ -801,6 +808,7 @@ func init() {
 	errLog.Printf("address: \t%s\n", address)
 	errLog.Printf("file: \t%s\n", conditionsPath)
 	errLog.Printf("interval: \t%s\n", interval)
+
 }
 
 func main() {
@@ -858,7 +866,6 @@ func main() {
 			fmt.Fprintln(os.Stdout, stre)
 			writeMetrics(a, i)
 		}
-
 		ticker := time.NewTicker(interval)
 		go func() {
 			for range ticker.C {
