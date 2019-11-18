@@ -22,8 +22,6 @@ before_install:
   - /tmp/scripts.sh update_docker
 
 stages:
-  - name: build amd64
-    if: branch != master AND tag IS blank
   - name: build and deploy master
     if: branch = master AND tag IS blank
   - name: build and deploy a version
@@ -31,12 +29,6 @@ stages:
 
 matrix:
   include:
-
-    - stage: build amd64
-      script:
-        - >-
-          /tmp/scripts.sh build_images
-          appf/controller-conviron ${TRAVIS_COMMIT::6} linux/amd64
     - stage: build and deploy master
       script:
         - >-
