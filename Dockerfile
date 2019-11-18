@@ -10,7 +10,8 @@ RUN dep ensure -vendor-only
 # Compile independent executable
 RUN CGO_ENABLED=0 GOOS=linux go build -a -o /bin/main .
 
-FROM scratch
+FROM alpine:latest
+RUN apk add --no-cache tzdata
 
 COPY --from=build-env /bin/main /
 
