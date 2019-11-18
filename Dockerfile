@@ -1,5 +1,17 @@
-FROM alpine:latest
-RUN apk add --no-cache tzdata
-COPY controller-conviron /bin
-VOLUME /data
-ENTRYPOINT ["controller-conviron"]
+FROM moikot/golang-dep:master as build-env
+
+ARG APP_FOLDER=/go/src/github.com/appf/controller-conviron/
+
+ADD . ${APP_FOLDER}
+WORKDIR ${APP_FOLDER}
+
+RUN dep ensure -vendor-only
+
+# Compile independent executable
+RUN CGO_ENABLED=0 GOOS=linux go build -a -o /bin/main .
+
+FROM scratch
+
+COPY --from=build-env /bin/main /
+
+ENTRYPOINT ["/main"]

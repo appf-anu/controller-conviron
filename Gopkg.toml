@@ -1,0 +1,15 @@
+[[constraint]]
+  branch = "master"
+  name = "github.com/appf-anu/chamber-tools"
+
+[[constraint]]
+  branch = "master"
+  name = "github.com/mdaffin/go-telegraf"
+
+[[constraint]]
+  branch = "master"
+  name = "github.com/ziutek/telnet"
+
+[prune]
+  go-tests = true
+  unused-packages = true

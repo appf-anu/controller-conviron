@@ -131,10 +131,13 @@ type IValues struct {
 	RelativeHumiditySetPoint            int `idx:"5"`
 	RelativeHumidityAdd                 int `idx:"6"`
 	Par                                 int `idx:"11"`
-	Light1SetPoint                      int `idx:"12"`
 	Light1Target                        int
-	//Light1SetPoint                      int `idx:"12"`
+	 Light1SetPoint                      int `idx:"12"`
+	//Light1SetPoint                      int `idx:"23"`
 	Light2Target int
+	Light2SetPoint                      int `idx:"13"`
+	//Light2SetPoint						int `idx:"24"`
+
 	HiPressure   int `idx:"33"`
 	LoPressure   int `idx:"34"`
 	//IPAddressOctet1						int `idx:"47"`
@@ -314,6 +317,7 @@ func getValuesHttp(a *AValues, i *IValues) (err error) {
 }
 
 func getValues(a *AValues, i *IValues) (err error) {
+
 	errLog.Println("Attempting telnet connection ...")
 	conn, err := telnet.DialTimeout("tcp", address, time.Second*30)
 	if err != nil {
@@ -510,8 +514,9 @@ func runStuff(theTime time.Time, lineSplit []string) bool {
 	// round humidity to nearest integer
 	i := IValues{RelativeHumidityTarget: int(math.Round(humidity))}
 
-	if useLight1 && len(chamber_tools.IndexConfig.ChannelsIdx) > 0{
-		foundLight := matchFloat.FindString(lineSplit[chamber_tools.IndexConfig.ChannelsIdx[0]])
+	if useLight1 && chamber_tools.IndexConfig.Light1Idx > 0{
+
+		foundLight := matchFloat.FindString(lineSplit[chamber_tools.IndexConfig.Light1Idx])
 		if len(foundLight) < 0 {
 			errLog.Println("no light1 value found")
 			return true
@@ -524,16 +529,17 @@ func runStuff(theTime time.Time, lineSplit []string) bool {
 		}
 		i.Light1Target = int(light)
 	}
-	if useLight2 && len(chamber_tools.IndexConfig.ChannelsIdx) > 1{
-		foundLight := matchFloat.FindString(lineSplit[chamber_tools.IndexConfig.ChannelsIdx[1]])
+	if useLight2 && chamber_tools.IndexConfig.Light2Idx > 0{
+
+		foundLight := matchFloat.FindString(lineSplit[chamber_tools.IndexConfig.Light2Idx])
 		if len(foundLight) < 0 {
-			errLog.Println("no light2 value found")
+			errLog.Println("no light1 value found")
 			return true
 		}
 
 		light, err := strconv.ParseFloat(foundLight, 64)
 		if err != nil {
-			errLog.Println("failed parsing light2 float")
+			errLog.Println("failed parsing light1 float")
 			return true
 		}
 		i.Light2Target = int(light)
@@ -553,6 +559,15 @@ func runStuff(theTime time.Time, lineSplit []string) bool {
 		int(i.RelativeHumidityTarget),
 		int(i.RelativeHumiditySetPoint),
 		int(i.RelativeHumidity))
+	if useLight1 || useLight2 {
+		errLog.Printf("%s PAR: %d (tgt|setp) l1:(%01d|%01d) l2:(%01d|%01d)",
+		theTime,
+		i.Par,
+		int(i.Light1Target),
+		int(i.Light1SetPoint),
+		int(i.Light2Target),
+		int(i.Light2SetPoint))
+	}
 	i.Success = "SUCCESS"
 	if err = writeValues(&a, &i); err != nil {
 		errLog.Println(err)
@@ -652,7 +667,6 @@ func toInfluxLineProtocol(metricName string, valueStruct interface{}, t int64) s
 	s = s.Elem()
 	typeOfT := s.Type()
 	keyvaluepairs := make([]string, 0)
-
 	keys := make([]string, 0)
 
 	for i := 0; i < s.NumField(); i++ {
@@ -717,6 +731,9 @@ func init() {
 		}
 	}
 
+
+	errLog.Println()
+
 	flag.BoolVar(&dummy, "dummy", false, "dont send conditions to chamber")
 	if tempV := strings.ToLower(os.Getenv("DUMMY")); tempV != "" {
 		if tempV == "true" || tempV == "1" {
@@ -725,6 +742,7 @@ func init() {
 			dummy = false
 		}
 	}
+
 
 	flag.BoolVar(&usehttp, "use-http", false, "use http to get metrics instead of telnet")
 	if tempV := strings.ToLower(os.Getenv("USE_HTTP")); tempV != "" {
@@ -801,7 +819,11 @@ func init() {
 			errLog.Println("No temperature or humidity headers found in conditions file" )
 		}
 	}
-
+	errLog.Printf("noMetrics: \t%s\n", noMetrics)
+	errLog.Printf("dummy: \t%s\n", dummy)
+	errLog.Printf("loopFirstDay: \t%s\n", loopFirstDay)
+	errLog.Printf("light1: \t%s\n", useLight1)
+	errLog.Printf("light2: \t%s\n", useLight2)
 	errLog.Printf("timezone: \t%s\n", chamber_tools.ZoneName)
 	errLog.Printf("hostTag: \t%s\n", hostTag)
 	errLog.Printf("groupTag: \t%s\n", groupTag)
