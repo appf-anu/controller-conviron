@@ -1,4 +1,4 @@
-FROM moikot/golang-dep:master as build-env
+FROM --platform=$BUILDPLATFORM moikot/golang-dep as build-env
 
 ARG APP_FOLDER=/go/src/github.com/appf/controller-conviron/
 
@@ -10,7 +10,7 @@ RUN dep ensure -vendor-only
 # Compile independent executable
 RUN CGO_ENABLED=0 GOOS=linux go build -a -o /bin/main .
 
-FROM alpine:latest
+FROM --platform=$BUILDPLATFORM alpine:latest
 RUN apk add --no-cache tzdata
 
 COPY --from=build-env /bin/main /
