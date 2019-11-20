@@ -1,6 +1,10 @@
 FROM --platform=$TARGETPLATFORM moikot/golang-dep as build-env
 
-ARG APP_FOLDER=/go/src/github.com/appf/controller-conviron/
+ARG TRAVIS_REPO_SLUG=dummy/main
+
+LABEL maintainer="gareth.dunstone@anu.edu.au"
+
+ENV APP_FOLDER=/go/src/github.com/$TRAVIS_REPO_SLUG
 
 ADD . ${APP_FOLDER}
 WORKDIR ${APP_FOLDER}
