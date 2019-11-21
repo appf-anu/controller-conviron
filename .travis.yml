@@ -35,7 +35,7 @@ matrix:
           echo "${DOCKER_PASSWORD}" |
           docker login -u "${DOCKER_USERNAME}" --password-stdin
         - >-
-          travis_wait 30 /tmp/scripts.sh build_images
+          /tmp/scripts.sh build_images
           ${DOCKER_REPO:-$TRAVIS_REPO_SLUG} master ${DOCKER_PLATFORMS} --push
           --build-arg TRAVIS_REPO_SLUG=${TRAVIS_REPO_SLUG}
     - stage: build and deploy a version
@@ -44,7 +44,7 @@ matrix:
           echo "${DOCKER_PASSWORD}" |
           docker login -u "${DOCKER_USERNAME}" --password-stdin
         - >-
-          travis_wait 30 /tmp/scripts.sh build_images
+          /tmp/scripts.sh build_images
           ${DOCKER_REPO:-$TRAVIS_REPO_SLUG} ${TRAVIS_TAG} ${DOCKER_PLATFORMS} --push
           --build-arg TRAVIS_REPO_SLUG=${TRAVIS_REPO_SLUG}
         - >-
