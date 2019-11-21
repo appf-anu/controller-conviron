@@ -12,7 +12,7 @@ WORKDIR ${APP_FOLDER}
 RUN dep ensure -vendor-only
 
 # Compile independent executable
-RUN CGO_ENABLED=0 GOOS=linux go build  -a -o /bin/main .
+RUN CGO_ENABLED=0 GOOS=linux go build -a -o /bin/main .
 
 FROM --platform=$TARGETPLATFORM alpine:latest
 
