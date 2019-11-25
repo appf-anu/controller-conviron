@@ -483,76 +483,30 @@ func login(conn *telnet.Conn) (err error) {
 
 // runStuff, should send values and write metrics.
 // returns true if program should continue, false if program should retry
-func runStuff(theTime time.Time, lineSplit []string) bool {
+func runStuff(point *chamber_tools.TimePoint) bool {
 
-	foundHum := matchFloat.FindString(lineSplit[chamber_tools.IndexConfig.HumidityIdx])
-	if len(foundHum) < 0 {
-		errLog.Println("no humidity value found")
-		return true
-	}
-
-	humidity, err := strconv.ParseFloat(foundHum, 64)
-	if err != nil {
-		errLog.Println("failed parsing humidity float")
-		return true
-	}
-
-	foundTemp := matchFloat.FindString(lineSplit[chamber_tools.IndexConfig.TemperatureIdx])
-	if len(foundTemp) < 0 {
-		errLog.Println("no temperature value found")
-		return true
-	}
-
-	temperature, err := strconv.ParseFloat(foundTemp, 64)
-	if err != nil {
-		errLog.Println("failed parsing temperature float")
-		return true
-	}
 
 	// round temperature to 1 decimal place
-	a := AValues{TemperatureTarget: math.Round(temperature*10) / 10}
+	a := AValues{TemperatureTarget: math.Round(point.Temperature*10) / 10}
 	// round humidity to nearest integer
-	i := IValues{RelativeHumidityTarget: int(math.Round(humidity))}
+	i := IValues{RelativeHumidityTarget: int(math.Round(point.RelativeHumidity))}
 
 	if useLight1 && chamber_tools.IndexConfig.Light1Idx > 0{
 
-		foundLight := matchFloat.FindString(lineSplit[chamber_tools.IndexConfig.Light1Idx])
-		if len(foundLight) < 0 {
-			errLog.Println("no light1 value found")
-			return true
-		}
-
-		light, err := strconv.ParseFloat(foundLight, 64)
-		if err != nil {
-			errLog.Println("failed parsing light1 float")
-			return true
-		}
-		i.Light1Target = int(light)
+		i.Light1Target = point.Light1
 	}
 	if useLight2 && chamber_tools.IndexConfig.Light2Idx > 0{
-
-		foundLight := matchFloat.FindString(lineSplit[chamber_tools.IndexConfig.Light2Idx])
-		if len(foundLight) < 0 {
-			errLog.Println("no light1 value found")
-			return true
-		}
-
-		light, err := strconv.ParseFloat(foundLight, 64)
-		if err != nil {
-			errLog.Println("failed parsing light1 float")
-			return true
-		}
-		i.Light2Target = int(light)
+		i.Light2Target = point.Light2
 	}
 
-	err = getValues(&a, &i)
+	err := getValues(&a, &i)
 	if err != nil {
 		errLog.Println(err)
 		time.Sleep(time.Second * 10)
 		return false
 	}
 	errLog.Printf("%s (tgt|setp|act) t:(%.1f|%.1f|%.1f) rh:(%02d|%02d|%02d)",
-		theTime,
+		point.Datetime,
 		a.TemperatureTarget,
 		a.TemperatureSetPoint,
 		a.Temperature,
@@ -561,7 +515,7 @@ func runStuff(theTime time.Time, lineSplit []string) bool {
 		int(i.RelativeHumidity))
 	if useLight1 || useLight2 {
 		errLog.Printf("%s PAR: %d (tgt|setp) l1:(%01d|%01d) l2:(%01d|%01d)",
-		theTime,
+		point.Datetime,
 		i.Par,
 		int(i.Light1Target),
 		int(i.Light1SetPoint),

@@ -3,11 +3,11 @@
 
 [[projects]]
   branch = "master"
-  digest = "1:dad4132c9079386cd0309f2279e6fb5133181753fbaf1277d42c5c827e1a6cc2"
+  digest = "1:7b6e41e89a9f9cd8b3174d376a4b77d70880070b398bd572273510aa7eac6885"
   name = "github.com/appf-anu/chamber-tools"
   packages = ["."]
   pruneopts = "UT"
-  revision = "ef1f36c5a2c6e8fd7bc628570a15e93faa188f6e"
+  revision = "e481c97cf4d373d822ff348fb6daca1594605d0f"
 
 [[projects]]
   branch = "master"
@@ -24,6 +24,22 @@
   packages = ["."]
   pruneopts = "UT"
   revision = "e4f1649ff5751ca6fdb13b7abbcfaa138eacf355"
+
+[[projects]]
+  digest = "1:cf31692c14422fa27c83a05292eb5cbe0fb2775972e8f1f8446a71549bd8980b"
+  name = "github.com/pkg/errors"
+  packages = ["."]
+  pruneopts = "UT"
+  revision = "ba968bfe8b2f7e042a574c888954fccecfa385b4"
+  version = "v0.8.1"
+
+[[projects]]
+  digest = "1:fb8459b685ed5bd854573b57766937280b74b218c6fa128af6d80aa0343f4694"
+  name = "github.com/tealeg/xlsx"
+  packages = ["."]
+  pruneopts = "UT"
+  revision = "7476f094548e5a0e9131fbaf1a5a53e38bf26e9a"
+  version = "v2.0.1"
 
 [[projects]]
   branch = "master"
