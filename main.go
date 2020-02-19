@@ -1,13 +1,16 @@
 package main
 
 import (
+	"encoding/xml"
 	"flag"
 	"fmt"
 	"github.com/appf-anu/chamber-tools"
 	"github.com/mdaffin/go-telegraf"
 	"github.com/ziutek/telnet"
+	"io/ioutil"
 	"log"
 	"math"
+	"net/http"
 	"os"
 	"reflect"
 	"regexp"
@@ -15,9 +18,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"encoding/xml"
-	"net/http"
-	"io/ioutil"
 )
 
 var (
@@ -400,14 +400,7 @@ func writeValues(a *AValues, i *IValues) (err error) {
 		return nil
 	}
 
-	// make this happen from the struct
-	tempCommand := fmt.Sprintf("pcoset 0 I %d %d; ", temperatureDataIndex, int(a.TemperatureTarget*temperatureMultiplier))
-	humCommand := fmt.Sprintf("pcoset 0 I %d %d; ", humidityDataIndex, int(i.RelativeHumidityTarget))
-	light1Command := fmt.Sprintf("pcoset 0 I %d %d; ", light1DataIndex, int(i.Light1Target))
-	light2Command := fmt.Sprintf("pcoset 0 I %d %d; ", light2DataIndex, int(i.Light2Target))
-
 	// set busy flag
-
 	if _, err = chompAllValues(conn, setBusyFlagCommand); err != nil {
 		return
 	}
@@ -415,30 +408,47 @@ func writeValues(a *AValues, i *IValues) (err error) {
 	if _, err = chompAllValues(conn, initCommand); err != nil {
 		return
 	}
-
-	if _, err = chompAllValues(conn, tempCommand); err != nil {
-		return
+	// temperature
+	if a.TemperatureTarget != nullTargetFloat{
+		temperatureIntValue := int(a.TemperatureTarget*temperatureMultiplier)
+		temperatureCommand := fmt.Sprintf("pcoset 0 I %d %d; ",
+			temperatureDataIndex,
+			temperatureIntValue)
+		if _, err = chompAllValues(conn, temperatureCommand); err != nil {
+			return
+		}
 	}
 
-	if _, err = chompAllValues(conn, humCommand); err != nil {
-		return
+	// humidity
+	if i.RelativeHumidityTarget != nullTargetInt{
+		humidityCommand := fmt.Sprintf("pcoset 0 I %d %d; ",
+			humidityDataIndex,
+			i.RelativeHumidityTarget)
+		if _, err = chompAllValues(conn, humidityCommand); err != nil {
+			return
+		}
 	}
-
-	if useLight1 {
+	// light1 & light2
+	if useLight1 && i.Light1Target != nullTargetInt {
+		light1Command := fmt.Sprintf("pcoset 0 I %d %d; ", light1DataIndex, i.Light1Target)
 		if _, err = chompAllValues(conn, light1Command); err != nil {
 			return
 		}
 	}
-	if useLight2 {
+	if useLight2 && i.Light2Target != nullTargetInt {
+		light2Command := fmt.Sprintf("pcoset 0 I %d %d; ", light2DataIndex, i.Light2Target)
 		if _, err = chompAllValues(conn, light2Command); err != nil {
 			return
 		}
 	}
-
+	// teardown
 	if _, err = chompAllValues(conn, teardownCommand); err != nil {
 		return
 	}
+	// wait a bit
 	time.Sleep(time.Second * 2)
+
+	// do the rest of the stuff to release the chamber
 	if _, err = chompAllValues(conn, clearWriteFlagCommand); err != nil {
 		return
 	}
@@ -448,11 +458,11 @@ func writeValues(a *AValues, i *IValues) (err error) {
 	if _, err = chompAllValues(conn, teardownCommand); err != nil {
 		return
 	}
+	// make sure its released and cleared
 	time.Sleep(time.Second * 2)
 	if _, err = chompAllValues(conn, clearWriteFlagCommand); err != nil {
 		return
 	}
-
 	if _, err = chompAllValues(conn, clearBusyFlagCommand); err != nil {
 		return
 	}
@@ -461,18 +471,21 @@ func writeValues(a *AValues, i *IValues) (err error) {
 }
 
 func login(conn *telnet.Conn) (err error) {
+	time.Sleep(time.Second * 1)
 	err = conn.SkipUntil("login: ")
 	if err != nil {
 		return
 	}
 
 	conn.Write([]byte("root\n"))
+	time.Sleep(time.Second * 1)
 	err = conn.SkipUntil("Password: ")
 	if err != nil {
 		return
 	}
 
 	conn.Write([]byte("froot\n"))
+	time.Sleep(time.Second * 1)
 	err = conn.SkipUntil("# ")
 	if err != nil {
 		return
@@ -484,18 +497,27 @@ func login(conn *telnet.Conn) (err error) {
 // runStuff, should send values and write metrics.
 // returns true if program should continue, false if program should retry
 func runStuff(point *chamber_tools.TimePoint) bool {
-
-
 	// round temperature to 1 decimal place
-	a := AValues{TemperatureTarget: math.Round(point.Temperature*10) / 10}
+	// handle nulls
+	a := AValues{TemperatureTarget: nullTargetFloat}
+	if point.Temperature != nullTargetFloat {
+		a = AValues{TemperatureTarget: math.Round(point.Temperature*10) / 10}
+	}
 	// round humidity to nearest integer
-	i := IValues{RelativeHumidityTarget: int(math.Round(point.RelativeHumidity))}
+	// handle nulls, IValues use nullTargetInt
+	i := IValues{
+		RelativeHumidityTarget:nullTargetInt,
+		Light1Target:nullTargetInt,
+		Light2Target:nullTargetInt,
+	}
+	if point.RelativeHumidity != nullTargetFloat{
+		i = IValues{RelativeHumidityTarget: int(math.Round(point.RelativeHumidity))}
+	}
 
-	if useLight1 && chamber_tools.IndexConfig.Light1Idx > 0{
-
+	if useLight1 && chamber_tools.IndexConfig.Light1Idx > 0 {
 		i.Light1Target = point.Light1
 	}
-	if useLight2 && chamber_tools.IndexConfig.Light2Idx > 0{
+	if useLight2 && chamber_tools.IndexConfig.Light2Idx > 0 {
 		i.Light2Target = point.Light2
 	}
 
@@ -510,17 +532,17 @@ func runStuff(point *chamber_tools.TimePoint) bool {
 		a.TemperatureTarget,
 		a.TemperatureSetPoint,
 		a.Temperature,
-		int(i.RelativeHumidityTarget),
-		int(i.RelativeHumiditySetPoint),
-		int(i.RelativeHumidity))
+		i.RelativeHumidityTarget,
+		i.RelativeHumiditySetPoint,
+		i.RelativeHumidity)
 	if useLight1 || useLight2 {
 		errLog.Printf("%s PAR: %d (tgt|setp) l1:(%01d|%01d) l2:(%01d|%01d)",
 		point.Datetime,
 		i.Par,
-		int(i.Light1Target),
-		int(i.Light1SetPoint),
-		int(i.Light2Target),
-		int(i.Light2SetPoint))
+		i.Light1Target,
+		i.Light1SetPoint,
+		i.Light2Target,
+		i.Light2SetPoint)
 	}
 	i.Success = "SUCCESS"
 	if err = writeValues(&a, &i); err != nil {
@@ -846,7 +868,11 @@ func main() {
 		go func() {
 			for range ticker.C {
 				a := AValues{TemperatureTarget: nullTargetFloat}
-				i := IValues{RelativeHumidityTarget: nullTargetInt}
+				i := IValues{
+					RelativeHumidityTarget: nullTargetInt,
+					Light1Target:nullTargetInt,
+					Light2Target:nullTargetInt,
+				}
 
 				var err error
 				if usehttp {
