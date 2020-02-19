@@ -104,14 +104,15 @@ var (
 	secondaryGetChamberTimeCommand = "pcoget 0 I 45 2;"
 )
 
-// conviron indices start at 1
-const (
+//const (
 	// it is extremely unlikely (see. impossible) that we will be measuring a humidity of 214,748,365 %RH or a
 	// temperature of -340,282,346,638,528,859,811,704,183,484,516,925,440°C until we invent some new physics, so until
 	// then, I will use these values as the unset or null values for HumidityTarget and TemperatureTarget
-	nullTargetInt   = math.MinInt32
-	nullTargetFloat = -math.MaxFloat32
-)
+	//nullTargetInt   = math.MinInt32
+	//chamber_tools.NullTargetFloat64 = -math.MaxFloat32
+//)
+
+// conviron indices start at 1
 
 // AValues type represent the temperature values for the chamber (I dont know why these are on a different row to
 // everything else, but they are. They also all require dividing by 10.0 because they are returned as integers.)
@@ -409,7 +410,7 @@ func writeValues(a *AValues, i *IValues) (err error) {
 		return
 	}
 	// temperature
-	if a.TemperatureTarget != nullTargetFloat{
+	if a.TemperatureTarget != chamber_tools.NullTargetFloat64 {
 		temperatureIntValue := int(a.TemperatureTarget*temperatureMultiplier)
 		temperatureCommand := fmt.Sprintf("pcoset 0 I %d %d; ",
 			temperatureDataIndex,
@@ -420,7 +421,7 @@ func writeValues(a *AValues, i *IValues) (err error) {
 	}
 
 	// humidity
-	if i.RelativeHumidityTarget != nullTargetInt{
+	if i.RelativeHumidityTarget != chamber_tools.NullTargetInt {
 		humidityCommand := fmt.Sprintf("pcoset 0 I %d %d; ",
 			humidityDataIndex,
 			i.RelativeHumidityTarget)
@@ -429,13 +430,13 @@ func writeValues(a *AValues, i *IValues) (err error) {
 		}
 	}
 	// light1 & light2
-	if useLight1 && i.Light1Target != nullTargetInt {
+	if useLight1 && i.Light1Target != chamber_tools.NullTargetInt {
 		light1Command := fmt.Sprintf("pcoset 0 I %d %d; ", light1DataIndex, i.Light1Target)
 		if _, err = chompAllValues(conn, light1Command); err != nil {
 			return
 		}
 	}
-	if useLight2 && i.Light2Target != nullTargetInt {
+	if useLight2 && i.Light2Target != chamber_tools.NullTargetInt {
 		light2Command := fmt.Sprintf("pcoset 0 I %d %d; ", light2DataIndex, i.Light2Target)
 		if _, err = chompAllValues(conn, light2Command); err != nil {
 			return
@@ -499,18 +500,18 @@ func login(conn *telnet.Conn) (err error) {
 func runStuff(point *chamber_tools.TimePoint) bool {
 	// round temperature to 1 decimal place
 	// handle nulls
-	a := AValues{TemperatureTarget: nullTargetFloat}
-	if point.Temperature != nullTargetFloat {
+	a := AValues{TemperatureTarget: chamber_tools.NullTargetFloat64}
+	if point.Temperature != chamber_tools.NullTargetFloat64 {
 		a = AValues{TemperatureTarget: math.Round(point.Temperature*10) / 10}
 	}
 	// round humidity to nearest integer
 	// handle nulls, IValues use nullTargetInt
 	i := IValues{
-		RelativeHumidityTarget:nullTargetInt,
-		Light1Target:nullTargetInt,
-		Light2Target:nullTargetInt,
+		RelativeHumidityTarget:chamber_tools.NullTargetInt,
+		Light1Target:chamber_tools.NullTargetInt,
+		Light2Target:chamber_tools.NullTargetInt,
 	}
-	if point.RelativeHumidity != nullTargetFloat{
+	if point.RelativeHumidity != chamber_tools.NullTargetFloat64{
 		i = IValues{RelativeHumidityTarget: int(math.Round(point.RelativeHumidity))}
 	}
 
@@ -561,19 +562,19 @@ func decodeStructToMeasurement(m *telegraf.Measurement, va reflect.Value, i int)
 
 	switch v := fi.(type) {
 	case int64:
-		if v == nullTargetInt {
+		if v == chamber_tools.NullTargetInt64 {
 			break
 		}
 		m.AddInt64(n, v)
 	case int32:
 		m.AddInt32(n, v)
 	case int:
-		if v == nullTargetInt {
+		if v == chamber_tools.NullTargetInt {
 			break
 		}
 		m.AddInt(n, v)
 	case float64:
-		if v == nullTargetFloat {
+		if v == chamber_tools.NullTargetFloat64 {
 			break
 		}
 		m.AddFloat64(n, v)
@@ -656,12 +657,12 @@ func toInfluxLineProtocol(metricName string, valueStruct interface{}, t int64) s
 
 		switch v := val.(type) {
 		case int:
-			if v == nullTargetInt {
+			if v == chamber_tools.NullTargetInt {
 				break
 			}
 			keyvaluepairs = append(keyvaluepairs, fmt.Sprintf("%s=%di", key, v))
 		case float64:
-			if v == nullTargetFloat {
+			if v == chamber_tools.NullTargetFloat64 {
 				break
 			}
 			keyvaluepairs = append(keyvaluepairs, fmt.Sprintf("%s=%f", key, v))
@@ -812,8 +813,8 @@ func init() {
 func main() {
 
 	if interval == time.Second*0 {
-		a := AValues{TemperatureTarget: nullTargetFloat}
-		i := IValues{RelativeHumidityTarget: nullTargetInt, Light1Target: nullTargetInt, Light2Target: nullTargetInt}
+		a := AValues{TemperatureTarget: chamber_tools.NullTargetFloat64}
+		i := IValues{RelativeHumidityTarget: chamber_tools.NullTargetInt, Light1Target: chamber_tools.NullTargetInt, Light2Target: chamber_tools.NullTargetInt}
 		var err error
 		if usehttp {
 			err = getValuesHttp(&a, &i)
@@ -840,8 +841,8 @@ func main() {
 
 	if !noMetrics && (conditionsPath == "" || dummy) {
 
-		a := AValues{TemperatureTarget: nullTargetFloat}
-		i := IValues{RelativeHumidityTarget: nullTargetInt}
+		a := AValues{TemperatureTarget: chamber_tools.NullTargetFloat64}
+		i := IValues{RelativeHumidityTarget: chamber_tools.NullTargetInt}
 
 		var err error
 		if usehttp {
@@ -867,11 +868,11 @@ func main() {
 		ticker := time.NewTicker(interval)
 		go func() {
 			for range ticker.C {
-				a := AValues{TemperatureTarget: nullTargetFloat}
+				a := AValues{TemperatureTarget: chamber_tools.NullTargetFloat64}
 				i := IValues{
-					RelativeHumidityTarget: nullTargetInt,
-					Light1Target:nullTargetInt,
-					Light2Target:nullTargetInt,
+					RelativeHumidityTarget: chamber_tools.NullTargetInt,
+					Light1Target:chamber_tools.NullTargetInt,
+					Light2Target:chamber_tools.NullTargetInt,
 				}
 
 				var err error

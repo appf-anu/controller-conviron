@@ -3,11 +3,11 @@
 
 [[projects]]
   branch = "master"
-  digest = "1:5decc697a3ceb2b21d6735b9b9cff2573f3418d452ea876dcc8196cd09b02da6"
+  digest = "1:74f3be3e0e53fcea80aa6d4df4ec9a114c120cf08bac46cdbc44b0b48ec4b164"
   name = "github.com/appf-anu/chamber-tools"
   packages = ["."]
   pruneopts = "UT"
-  revision = "d5e2354bdb332b57e283b849da33dd0c53e88914"
+  revision = "c1a5e89e277f744a64650888fe24a663a5fffb2a"
 
 [[projects]]
   branch = "master"

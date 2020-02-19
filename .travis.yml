@@ -47,10 +47,10 @@ matrix:
           /tmp/scripts.sh build_images
           ${DOCKER_REPO:-$TRAVIS_REPO_SLUG} ${TRAVIS_TAG} ${DOCKER_PLATFORMS} --push
           --build-arg TRAVIS_REPO_SLUG=${TRAVIS_REPO_SLUG}
-        - >-
-          /tmp/scripts.sh push_readme
-          ${DOCKER_REPO} README.md
-          ${DOCKER_USERNAME} ${DOCKER_PASSWORD}
+#        - >-
+#          /tmp/scripts.sh push_readme
+#          ${DOCKER_REPO} README.md
+#          ${DOCKER_USERNAME} ${DOCKER_PASSWORD}
           
 notifications:
   email: false
