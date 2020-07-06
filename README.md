@@ -1,5 +1,7 @@
 # controller-conviron
 
+this repo is old and deprecated, new repo is at https://gitlab.com/appf-anu/controller-conviron2
+
 network telnet controller for conviron growth chambers
 
 
